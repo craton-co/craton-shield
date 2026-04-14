@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Craton Software Company
+#
+# cbindgen configuration for vs-ffi-auto C header generation.
+# Usage:
+#   cbindgen --config crates/ffi-auto/cbindgen.toml \
+#            --crate vs-ffi-auto \
+#            --output crates/ffi-auto/vs_auto.h
+
+language = "C"
+
+header = """// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Craton Software Company
+//
+// C header for vs-ffi-auto. Manually maintained — update when FFI surface changes."""
+
+include_guard = "VS_AUTO_H"
+tab_width = 4
+style = "both"
+
+after_includes = """
+#ifdef __cplusplus
+extern "C" {
+#endif"""
+
+trailer = """
+#ifdef __cplusplus
+}
+#endif"""
+
+[export]
+include = [
+    "VsResult",
+    "VsCanFrame",
+    "VsEthPacket",
+    "VsHealthAuto",
+    "VsCryptoCallbacks",
+]
+
+[fn]
+rename_args = "CamelCase"

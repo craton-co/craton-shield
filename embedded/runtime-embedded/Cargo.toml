@@ -1,0 +1,55 @@
+[package]
+name = "vs-runtime-embedded"
+publish = false  # uses path deps — remove when ready for crates.io
+description = "Lightweight IoT/embedded runtime orchestrating MQTT, CoAP, BLE, Zigbee, LoRa, and Modbus security monitors for Craton Shield"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+vs-types-embedded = { path = "../types-embedded" }
+vs-crypto = { path = "../../core/crypto" }
+vs-runtime = { path = "../../core/runtime" }
+vs-mqtt-monitor = { path = "../mqtt-monitor" }
+vs-coap-monitor = { path = "../coap-monitor" }
+vs-ble-monitor = { path = "../ble-monitor" }
+vs-zigbee-monitor = { path = "../zigbee-monitor" }
+vs-lora-monitor = { path = "../lora-monitor" }
+vs-modbus-monitor = { path = "../modbus-monitor-emb", package = "vs-modbus-monitor-emb" }
+
+[dev-dependencies]
+vs-crypto = { path = "../../core/crypto", features = ["mock-hsm"] }
+
+[features]
+default = []
+# Enables deprecated `*_mut()` accessors that bypass security encapsulation.
+# Only effective when debug_assertions are enabled (dev/test builds).
+# Do not enable in production builds. Renamed from `unsafe-access` in v0.8.0.
+direct-access = []
+capacity-large = [
+    "vs-runtime/capacity-large",
+    "vs-mqtt-monitor/capacity-large",
+    "vs-coap-monitor/capacity-large",
+    "vs-ble-monitor/capacity-large",
+    "vs-zigbee-monitor/capacity-large",
+    "vs-lora-monitor/capacity-large",
+    "vs-modbus-monitor/capacity-large",
+]
+capacity-xl = [
+    "vs-runtime/capacity-xl",
+    "vs-mqtt-monitor/capacity-xl",
+    "vs-coap-monitor/capacity-xl",
+    "vs-ble-monitor/capacity-xl",
+    "vs-zigbee-monitor/capacity-xl",
+    "vs-lora-monitor/capacity-xl",
+    "vs-modbus-monitor/capacity-xl",
+]
+
+[lints]
+workspace = true

@@ -1,0 +1,69 @@
+# CODEOWNERS for craton-shield
+#
+# Order matters: the LAST matching pattern wins. More-specific rules appear
+# later in the file so they override the generic default.
+#
+# Teams referenced here must exist under the @craton-co GitHub organization.
+# See MAINTAINERS.md and GOVERNANCE.md for the responsibilities of each team.
+
+# --- Default owners -----------------------------------------------------------
+# Every file not matched by a later rule falls to the core maintainers.
+*                                   @craton-co/core-maintainers
+
+# --- Repository-wide governance & policy --------------------------------------
+/LICENSE                            @craton-co/founders
+/NOTICE                             @craton-co/founders
+/GOVERNANCE.md                      @craton-co/founders
+/MAINTAINERS.md                     @craton-co/founders
+/CODE_OF_CONDUCT.md                 @craton-co/founders
+/ROADMAP.md                         @craton-co/founders
+/CHANGELOG.md                       @craton-co/core-maintainers
+/RELEASING.md                       @craton-co/core-maintainers
+/README.md                          @craton-co/core-maintainers
+/ARCHITECTURE.md                    @craton-co/core-maintainers
+/INSTALL.md                         @craton-co/core-maintainers
+/CONTRIBUTING.md                    @craton-co/core-maintainers
+/ACKNOWLEDGMENTS.md                 @craton-co/core-maintainers
+/SUPPORT.md                         @craton-co/core-maintainers
+
+# --- CI / tooling / repo metadata ---------------------------------------------
+/.github/                           @craton-co/core-maintainers
+/.github/workflows/                 @craton-co/core-maintainers
+/.github/CODEOWNERS                 @craton-co/founders
+/.github/dependabot.yml             @craton-co/core-maintainers @craton-co/security-team
+/deny.toml                          @craton-co/core-maintainers @craton-co/security-team
+/Cargo.toml                         @craton-co/core-maintainers
+/Cargo.lock                         @craton-co/core-maintainers
+/rust-toolchain.toml                @craton-co/core-maintainers
+/.cargo/                            @craton-co/core-maintainers
+/scripts/                           @craton-co/core-maintainers
+
+# --- Security-sensitive surface (Security Team co-owns) -----------------------
+/SECURITY.md                        @craton-co/security-team @craton-co/founders
+/.github/ISSUE_TEMPLATE/security.md @craton-co/security-team
+/core/crypto/                       @craton-co/security-team @craton-co/core-maintainers
+/core/key-manager/                  @craton-co/security-team @craton-co/core-maintainers
+/core/secure-boot/                  @craton-co/security-team @craton-co/core-maintainers
+/core/ota-validator/                @craton-co/security-team @craton-co/core-maintainers
+/core/integrity/                    @craton-co/security-team @craton-co/core-maintainers
+/core/ids-engine/                   @craton-co/security-team @craton-co/core-maintainers
+/core/anomaly/                      @craton-co/security-team @craton-co/core-maintainers
+/core/netfw/                        @craton-co/security-team @craton-co/core-maintainers
+/core/policy-engine/                @craton-co/security-team @craton-co/core-maintainers
+/core/docs/threat-model.md          @craton-co/security-team
+/core/docs/tara.md                  @craton-co/security-team
+/core/docs/certification/           @craton-co/security-team @craton-co/founders
+
+# --- Core crates --------------------------------------------------------------
+/core/                              @craton-co/core-maintainers
+
+# --- Domain: Automotive -------------------------------------------------------
+/auto/                              @craton-co/auto-maintainers
+/auto/v2x/                          @craton-co/auto-maintainers @craton-co/security-team
+/auto/diag-gateway/                 @craton-co/auto-maintainers @craton-co/security-team
+
+# --- Domain: Embedded / IoT ---------------------------------------------------
+/embedded/                          @craton-co/embedded-maintainers
+
+# --- Domain: Industrial / OT --------------------------------------------------
+/industrial/                        @craton-co/industrial-maintainers

@@ -1,0 +1,23 @@
+[package]
+name = "vs-key-manager"
+description = "Key lifecycle management with zeroization and audit trails for Craton Shield"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { path = "../types" }
+vs-crypto = { path = "../crypto" }
+zeroize = { version = "1", default-features = false }
+
+[dev-dependencies]
+vs-crypto = { path = "../crypto", features = ["mock-hsm"] }
+
+[lints]
+workspace = true

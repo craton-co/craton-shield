@@ -1,0 +1,22 @@
+[package]
+name = "vs-can-monitor"
+description = "CAN/CAN-FD intrusion detection with flood, DLC, allowlist, and entropy analysis"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+testing = []
+
+[dependencies]
+vs-types = { path = "../types" }
+subtle = { version = "2", default-features = false }
+
+[lints]
+workspace = true

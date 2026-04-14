@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <style>
+      .layer-label { font-size: 13px; font-weight: 700; fill: #333; }
+      .box { rx: 6; ry: 6; stroke-width: 1.5; }
+      .box-label { font-size: 9px; font-weight: 600; fill: #fff; text-anchor: middle; dominant-baseline: central; }
+      .arrow { stroke: #555; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead); }
+      .flow-label { font-size: 8px; fill: #666; font-style: italic; text-anchor: middle; }
+      .layer-bg { rx: 10; ry: 10; stroke-width: 1; }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#555"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="600" fill="#f8f9fa"/>
+  <text x="400" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#1a1a2e">Craton Shield Core Architecture</text>
+
+  <!-- Layer 4: FFI (top) -->
+  <rect class="layer-bg" x="30" y="48" width="740" height="60" fill="#fce4ec" stroke="#e57373"/>
+  <text class="layer-label" x="45" y="66">FFI Layer</text>
+  <rect class="box" x="300" y="58" width="200" height="38" fill="#c62828" stroke="#b71c1c"/>
+  <text class="box-label" x="400" y="77">vs-ffi (C API / #[no_mangle])</text>
+
+  <!-- Layer 3: Orchestrator -->
+  <rect class="layer-bg" x="30" y="120" width="740" height="60" fill="#e8eaf6" stroke="#7986cb"/>
+  <text class="layer-label" x="45" y="138">Orchestrator</text>
+  <rect class="box" x="200" y="130" width="400" height="38" fill="#283593" stroke="#1a237e"/>
+  <text class="box-label" x="400" y="149">vs-runtime (CratonShield struct — tick / ingest / health)</text>
+
+  <!-- Layer 2: Core Subsystems -->
+  <rect class="layer-bg" x="30" y="192" width="740" height="280" fill="#e8f5e9" stroke="#81c784"/>
+  <text class="layer-label" x="45" y="210">Core Subsystems</text>
+
+  <!-- Row 1: Monitoring (blue) -->
+  <rect class="box" x="45" y="220" width="110" height="32" fill="#1565c0" stroke="#0d47a1"/>
+  <text class="box-label" x="100" y="236">vs-can-monitor</text>
+  <rect class="box" x="165" y="220" width="110" height="32" fill="#1565c0" stroke="#0d47a1"/>
+  <text class="box-label" x="220" y="236">vs-eth-monitor</text>
+  <rect class="box" x="285" y="220" width="110" height="32" fill="#1565c0" stroke="#0d47a1"/>
+  <text class="box-label" x="340" y="236">vs-ids-engine</text>
+  <rect class="box" x="405" y="220" width="100" height="32" fill="#9e9e9e" stroke="#757575"/>
+  <text class="box-label" x="455" y="236">vs-signal-ids *</text>
+  <rect class="box" x="515" y="220" width="100" height="32" fill="#1565c0" stroke="#0d47a1"/>
+  <text class="box-label" x="565" y="236">vs-anomaly</text>
+  <rect class="box" x="625" y="220" width="135" height="32" fill="#1565c0" stroke="#0d47a1"/>
+  <text class="box-label" x="692" y="236">vs-netfw</text>
+
+  <!-- Row 2: Crypto/Security (green) -->
+  <rect class="box" x="45" y="264" width="110" height="32" fill="#2e7d32" stroke="#1b5e20"/>
+  <text class="box-label" x="100" y="280">vs-crypto</text>
+  <rect class="box" x="165" y="264" width="110" height="32" fill="#2e7d32" stroke="#1b5e20"/>
+  <text class="box-label" x="220" y="280">vs-key-manager</text>
+  <rect class="box" x="285" y="264" width="110" height="32" fill="#2e7d32" stroke="#1b5e20"/>
+  <text class="box-label" x="340" y="280">vs-secure-boot</text>
+  <rect class="box" x="405" y="264" width="100" height="32" fill="#2e7d32" stroke="#1b5e20"/>
+  <text class="box-label" x="455" y="280">vs-integrity</text>
+  <rect class="box" x="515" y="264" width="100" height="32" fill="#2e7d32" stroke="#1b5e20"/>
+  <text class="box-label" x="565" y="280">vs-ota-validator</text>
+  <rect class="box" x="625" y="264" width="135" height="32" fill="#9e9e9e" stroke="#757575"/>
+  <text class="box-label" x="692" y="280">vs-diag-gateway *</text>
+
+  <!-- Row 3: Platform services (orange) -->
+  <rect class="box" x="45" y="308" width="130" height="32" fill="#e65100" stroke="#bf360c"/>
+  <text class="box-label" x="110" y="324">vs-event-logger</text>
+  <rect class="box" x="185" y="308" width="130" height="32" fill="#e65100" stroke="#bf360c"/>
+  <text class="box-label" x="250" y="324">vs-policy-engine</text>
+  <rect class="box" x="325" y="308" width="100" height="32" fill="#e65100" stroke="#bf360c"/>
+  <text class="box-label" x="375" y="324">vs-storage</text>
+  <rect class="box" x="435" y="308" width="130" height="32" fill="#9e9e9e" stroke="#757575"/>
+  <text class="box-label" x="500" y="324">vs-vsoc-telemetry *</text>
+
+  <!-- Row 4: AUTOSAR / V2X (grey — in craton-shield-auto) -->
+  <rect class="box" x="45" y="352" width="130" height="32" fill="#9e9e9e" stroke="#757575"/>
+  <text class="box-label" x="110" y="368">vs-autosar *</text>
+  <rect class="box" x="185" y="352" width="130" height="32" fill="#9e9e9e" stroke="#757575"/>
+  <text class="box-label" x="250" y="368">vs-v2x *</text>
+
+  <!-- Legend -->
+  <rect x="580" y="352" width="12" height="12" fill="#1565c0" rx="2"/>
+  <text x="597" y="362" font-size="9" fill="#333">Monitoring</text>
+  <rect x="650" y="352" width="12" height="12" fill="#2e7d32" rx="2"/>
+  <text x="667" y="362" font-size="9" fill="#333">Security</text>
+  <rect x="718" y="352" width="12" height="12" fill="#e65100" rx="2"/>
+  <text x="735" y="362" font-size="9" fill="#333">Platform</text>
+  <rect x="580" y="370" width="12" height="12" fill="#9e9e9e" rx="2"/>
+  <text x="597" y="380" font-size="9" fill="#333">* = craton-shield-auto</text>
+
+  <!-- Data flow arrows -->
+  <!-- CAN frames -> can-monitor -->
+  <text class="flow-label" x="100" y="410">CAN frames</text>
+  <path class="arrow" d="M 100,415 L 100,440"/>
+
+  <!-- can-monitor -> ids-engine -->
+  <rect class="box" x="50" y="442" width="100" height="26" fill="#1565c0" stroke="#0d47a1"/>
+  <text class="box-label" x="100" y="455">can-monitor</text>
+  <path class="arrow" d="M 150,455 L 240,455"/>
+
+  <!-- ids-engine -->
+  <rect class="box" x="242" y="442" width="100" height="26" fill="#1565c0" stroke="#0d47a1"/>
+  <text class="box-label" x="292" y="455">ids-engine</text>
+  <path class="arrow" d="M 342,455 L 430,455"/>
+
+  <!-- event-logger -->
+  <rect class="box" x="432" y="442" width="110" height="26" fill="#e65100" stroke="#bf360c"/>
+  <text class="box-label" x="487" y="455">event-logger</text>
+  <path class="arrow" d="M 542,455 L 620,455"/>
+
+  <!-- vsoc-telemetry -->
+  <rect class="box" x="622" y="442" width="120" height="26" fill="#e65100" stroke="#bf360c"/>
+  <text class="box-label" x="682" y="455">vsoc-telemetry</text>
+
+  <text class="flow-label" x="195" y="440">alerts</text>
+  <text class="flow-label" x="386" y="440">events</text>
+  <text class="flow-label" x="581" y="440">upload</text>
+
+  <!-- Layer 1: HAL (bottom) -->
+  <rect class="layer-bg" x="30" y="488" width="740" height="60" fill="#fff3e0" stroke="#ffb74d"/>
+  <text class="layer-label" x="45" y="506">HAL Traits (vs-hal)</text>
+  <rect class="box" x="55" y="510" width="130" height="28" fill="#ef6c00" stroke="#e65100"/>
+  <text class="box-label" x="120" y="524">CanBus</text>
+  <rect class="box" x="200" y="510" width="130" height="28" fill="#ef6c00" stroke="#e65100"/>
+  <text class="box-label" x="265" y="524">EthernetPhy</text>
+  <rect class="box" x="345" y="510" width="130" height="28" fill="#ef6c00" stroke="#e65100"/>
+  <text class="box-label" x="410" y="524">Timer</text>
+  <rect class="box" x="490" y="510" width="130" height="28" fill="#ef6c00" stroke="#e65100"/>
+  <text class="box-label" x="555" y="524">HsmHardware</text>
+  <rect class="box" x="635" y="510" width="125" height="28" fill="#ef6c00" stroke="#e65100"/>
+  <text class="box-label" x="697" y="524">SecureStorage</text>
+
+  <!-- Footer -->
+  <text x="400" y="575" text-anchor="middle" font-size="9" fill="#999">Craton Shield Core v0.6 — no_std, #![forbid(unsafe_code)], ASIL-B / ISO 21434 compliant</text>
+</svg>

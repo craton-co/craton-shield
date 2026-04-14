@@ -1,0 +1,18 @@
+[package]
+name = "vs-types"
+description = "Core types, error enums, and vehicle identity for Craton Shield"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+subtle = { version = "2", default-features = false }
+
+[lints]
+workspace = true

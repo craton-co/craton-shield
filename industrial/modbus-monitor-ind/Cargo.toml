@@ -1,0 +1,22 @@
+[package]
+name = "vs-modbus-monitor-ind"
+publish = false
+description = "Modbus RTU/TCP intrusion detection for Craton Shield Industrial"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+vs-types-ind = { path = "../types-ind" }
+
+[features]
+default = []
+
+[lints]
+workspace = true

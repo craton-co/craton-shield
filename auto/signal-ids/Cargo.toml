@@ -1,0 +1,17 @@
+[package]
+name = "vs-signal-ids"
+description = "CAN signal-level intrusion detection using per-signal EWMA anomaly ensemble"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+vs-anomaly = { path = "../../core/anomaly" }
+vs-can-monitor = { path = "../../core/can-monitor" }
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "vs-types-embedded"
+publish = false  # uses path deps — remove when ready for crates.io
+description = "IoT/embedded type extensions for Craton Shield"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+
+[features]
+default = []
+capacity-large = []
+capacity-xl = []
+
+[lints]
+workspace = true

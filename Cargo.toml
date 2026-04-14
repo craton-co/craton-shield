@@ -1,0 +1,145 @@
+[workspace]
+resolver = "2"
+members = [
+    # Core crates (Layer 0-3)
+    "core/types",
+    "core/crypto",
+    "core/key-manager",
+    "core/secure-boot",
+    "core/can-monitor",
+    "core/eth-monitor",
+    "core/ids-engine",
+    "core/anomaly",
+    "core/integrity",
+    "core/netfw",
+    "core/ota-validator",
+    "core/event-logger",
+    "core/policy-engine",
+    "core/runtime",
+    "core/ffi",
+    "core/storage",
+    "core/hal",
+    "core/hal-linux",
+    "core/report-iec62443",
+    "core/report-iso21434",
+    "core/report-iec62304",
+    # Auto crates
+    "auto/types-auto",
+    "auto/autosar",
+    "auto/v2x",
+    "auto/signal-ids",
+    "auto/diag-gateway",
+    "auto/runtime-auto",
+    "auto/ffi-auto",
+    # Embedded crates
+    "embedded/types-embedded",
+    "embedded/mqtt-monitor",
+    "embedded/coap-monitor",
+    "embedded/ble-monitor",
+    "embedded/zigbee-monitor",
+    "embedded/lora-monitor",
+    "embedded/modbus-monitor-emb",
+    "embedded/runtime-embedded",
+    # Industrial crates
+    "industrial/types-ind",
+    "industrial/modbus-monitor-ind",
+    "industrial/opcua-monitor",
+    "industrial/profinet-monitor",
+    "industrial/ethernetip-monitor",
+    "industrial/dnp3-monitor",
+    "industrial/bacnet-monitor",
+    "industrial/runtime-ind",
+    "industrial/s7comm-monitor",
+    "industrial/iec60870-monitor",
+    "industrial/iec61850-monitor",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.7.0"
+license = "Apache-2.0"
+rust-version = "1.82"
+repository = "https://github.com/craton-co/craton-shield"
+homepage = "https://github.com/craton-co/craton-shield"
+keywords = ["embedded", "cybersecurity", "intrusion-detection", "security", "no-std"]
+categories = ["embedded", "no-std", "hardware-support"]
+readme = "README.md"
+documentation = "https://github.com/craton-co/craton-shield/tree/main/docs"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"
+should_implement_trait = "allow"
+doc_markdown = "allow"
+trivially_copy_pass_by_ref = "allow"
+explicit_iter_loop = "allow"
+if_not_else = "allow"
+match_same_arms = "allow"
+large_stack_arrays = "allow"
+needless_return = "allow"
+manual_range_contains = "allow"
+comparison_chain = "allow"
+needless_lifetimes = "allow"
+single_char_lifetime_names = "allow"
+redundant_closure_for_method_calls = "allow"
+too_many_arguments = "allow"
+too_many_lines = "allow"
+items_after_statements = "allow"
+field_reassign_with_default = "allow"
+uninlined_format_args = "allow"
+unnecessary_wraps = "allow"
+derivable_impls = "allow"
+wrong_self_convention = "allow"
+needless_range_loop = "allow"
+redundant_closure = "allow"
+needless_bitwise_bool = "allow"
+assign_op_pattern = "allow"
+manual_find = "allow"
+arithmetic_side_effects = "allow"
+assertions_on_constants = "allow"
+explicit_deref_methods = "allow"
+mem_forget = "deny"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+inherits = "release"
+opt-level = 3
+debug-assertions = true
+
+# release-safe: Used by vs-ffi when building a shared library for C integration.
+# panic = "unwind" is required so that catch_unwind guards at the FFI boundary
+# work correctly. The workspace release profile uses panic = "abort" for binaries.
+[profile.release-safe]
+inherits = "release"
+overflow-checks = true
+panic = "unwind"
+
+[profile.release-perf]
+inherits = "release"
+opt-level = 3
+
+[profile.release-fast]
+inherits = "release"
+opt-level = 3
+overflow-checks = false
+
+[profile.release-size]
+inherits = "release"
+opt-level = "z"
+lto = true

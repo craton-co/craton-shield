@@ -1,0 +1,20 @@
+[package]
+name = "vs-autosar"
+description = "Craton Shield AUTOSAR Classic/Adaptive platform integration"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+stub = []
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+vs-types-auto = { path = "../types-auto" }
+vs-hal = { path = "../../core/hal" }
+
+[lints]
+workspace = true

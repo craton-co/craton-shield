@@ -1,0 +1,37 @@
+[package]
+name = "vs-ffi-auto"
+description = "Automotive C-compatible FFI bindings for Craton Shield"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+production = []
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+vs-crypto = { path = "../../core/crypto" }
+vs-runtime = { path = "../../core/runtime" }
+vs-runtime-auto = { path = "../runtime-auto" }
+vs-diag-gateway = { path = "../diag-gateway" }
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"

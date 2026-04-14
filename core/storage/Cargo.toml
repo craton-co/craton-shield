@@ -1,0 +1,31 @@
+[package]
+name = "vs-storage"
+description = "Persistent storage abstraction for configuration and key material"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { path = "../types" }
+vs-crypto = { path = "../crypto", optional = true }
+zeroize = { version = "1", default-features = false }
+libc = { version = "0.2", optional = true }
+
+[features]
+default = []
+std = ["libc"]
+encrypted = ["vs-crypto"]
+capacity-large = []
+capacity-xl = []
+
+[dev-dependencies]
+vs-crypto = { path = "../crypto", features = ["mock-hsm"] }
+
+[lints]
+workspace = true

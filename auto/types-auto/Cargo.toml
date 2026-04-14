@@ -1,0 +1,15 @@
+[package]
+name = "vs-types-auto"
+description = "Automotive-specific types for Craton Shield (VehicleId, BusType, source constants)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+
+[lints]
+workspace = true

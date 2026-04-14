@@ -1,0 +1,26 @@
+# Build artifacts
+/target/
+target/
+
+# IDE
+.idea/
+.claude/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Coverage
+lcov.info
+*.profraw
+*.profdata
+
+# Cargo-deny advisory DB lock
+advisory-db/

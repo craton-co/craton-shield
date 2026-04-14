@@ -1,0 +1,23 @@
+[package]
+name = "vs-ids-engine"
+description = "Alert correlation engine combining CAN and Ethernet IDS subsystems"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { path = "../types" }
+vs-can-monitor = { path = "../can-monitor" }
+vs-eth-monitor = { path = "../eth-monitor" }
+
+[dev-dependencies]
+vs-can-monitor = { path = "../can-monitor", features = ["testing"] }
+
+[lints]
+workspace = true

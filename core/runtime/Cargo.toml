@@ -1,0 +1,54 @@
+[package]
+name = "vs-runtime"
+description = "Craton Shield platform orchestrator managing all security subsystems"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { path = "../types" }
+vs-crypto = { path = "../crypto" }
+vs-key-manager = { path = "../key-manager" }
+vs-secure-boot = { path = "../secure-boot" }
+vs-can-monitor = { path = "../can-monitor" }
+vs-eth-monitor = { path = "../eth-monitor" }
+vs-ids-engine = { path = "../ids-engine" }
+vs-anomaly = { path = "../anomaly" }
+vs-integrity = { path = "../integrity" }
+vs-netfw = { path = "../netfw" }
+vs-ota-validator = { path = "../ota-validator" }
+vs-event-logger = { path = "../event-logger" }
+vs-policy-engine = { path = "../policy-engine" }
+vs-storage = { path = "../storage" }
+vs-hal = { path = "../hal" }
+
+[dev-dependencies]
+vs-crypto = { path = "../crypto", features = ["mock-hsm"] }
+vs-types = { path = "../types" }
+
+[features]
+default = []
+capacity-large = []
+capacity-xl = []
+## Enable real ML-KEM-768 / ML-DSA-65 post-quantum cryptography (FIPS 203/204).
+## Requires nightly or a stable toolchain that ships the `ml-kem` / `ml-dsa`
+## RustCrypto crates.  Disabled by default; use `StubPostQuantumProvider`
+## otherwise.
+pq = ["vs-crypto/pq"]
+
+[[example]]
+name = "s32g3_integration"
+path = "../../core/examples/s32g3_integration.rs"
+
+[[test]]
+name = "fault_injection"
+path = "../../core/tests/fault_injection.rs"
+
+[lints]
+workspace = true

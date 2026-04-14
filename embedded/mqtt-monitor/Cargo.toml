@@ -1,0 +1,24 @@
+[package]
+name = "vs-mqtt-monitor"
+publish = false  # uses path deps — remove when ready for crates.io
+description = "MQTT protocol intrusion detection for Craton Shield"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+vs-types-embedded = { path = "../types-embedded" }
+
+[features]
+default = []
+capacity-large = ["vs-types-embedded/capacity-large"]
+capacity-xl = ["vs-types-embedded/capacity-xl"]
+
+[lints]
+workspace = true

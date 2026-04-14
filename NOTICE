@@ -1,0 +1,77 @@
+Craton Shield
+Copyright 2026 Craton Software Company
+
+This product includes software developed by Craton Software Company and
+contributors to the Craton Shield open-source project
+(https://github.com/craton-co/craton-shield).
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this product except in compliance with the License. You may obtain a
+copy of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+-------------------------------------------------------------------------------
+Third-Party Components
+-------------------------------------------------------------------------------
+
+Craton Shield incorporates, links against, or depends on the following
+third-party open-source software. Each component is the property of its
+respective author(s) and is licensed under its own terms. This NOTICE file
+is provided for attribution and does not modify the licenses of those
+components. A fuller acknowledgment is available in ACKNOWLEDGMENTS.md.
+
+* RustCrypto project (https://github.com/RustCrypto)
+  - aes-gcm, sha2, hmac, p256, ecdsa, signature
+  - Licensed under the Apache License 2.0 and/or the MIT License
+  - Copyright (c) RustCrypto Developers
+
+* subtle (https://crates.io/crates/subtle)
+  - Constant-time cryptographic primitives
+  - Licensed under the BSD 3-Clause License
+  - Copyright (c) 2016-2017 Isis Agora Lovecruft, Henry de Valence
+
+* zeroize (https://crates.io/crates/zeroize)
+  - Securely zero memory while avoiding compiler optimizations
+  - Licensed under the Apache License 2.0 and/or the MIT License
+  - Copyright (c) The RustCrypto Project Developers
+
+* ml-kem (https://crates.io/crates/ml-kem)
+  - FIPS 203 ML-KEM (Module-Lattice-Based Key-Encapsulation Mechanism)
+  - Licensed under the Apache License 2.0 and/or the MIT License
+  - Copyright (c) RustCrypto Developers
+
+* ml-dsa (https://crates.io/crates/ml-dsa)
+  - FIPS 204 ML-DSA (Module-Lattice-Based Digital Signature Algorithm)
+  - Licensed under the Apache License 2.0 and/or the MIT License
+  - Copyright (c) RustCrypto Developers
+
+* proptest (https://crates.io/crates/proptest)
+  - Property-based testing framework (development-only)
+  - Licensed under the Apache License 2.0 and/or the MIT License
+  - Copyright (c) 2017 Jason Lingle
+
+* Criterion.rs (https://crates.io/crates/criterion)
+  - Statistics-driven microbenchmarking library (development-only)
+  - Licensed under the Apache License 2.0 and/or the MIT License
+  - Copyright (c) 2014 Jorge Aparicio; (c) 2017-present Brook Heisler
+
+-------------------------------------------------------------------------------
+Standards References
+-------------------------------------------------------------------------------
+
+Craton Shield is designed with guidance from ISO/SAE 21434, ISO 26262,
+IEC 62443, IEC 62304, AUTOSAR, SAE J1939 / J3061, The Update Framework (TUF),
+and FIPS 140-3. These standards are the property of their respective standards
+bodies (ISO, IEC, SAE, AUTOSAR consortium, NIST, and the TUF project) and are
+referenced here solely for attribution; no endorsement or certification by any
+standards body is implied.
+
+The full list of acknowledgments, including community and research credits,
+is maintained in ACKNOWLEDGMENTS.md at the root of this repository.

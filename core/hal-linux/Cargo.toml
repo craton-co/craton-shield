@@ -1,0 +1,21 @@
+[package]
+name = "vs-hal-linux"
+description = "Linux HAL implementation with SocketCAN and raw Ethernet support"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { path = "../types" }
+vs-hal = { path = "../hal" }
+libc = { version = "0.2", default-features = false }
+
+[lints]
+workspace = true

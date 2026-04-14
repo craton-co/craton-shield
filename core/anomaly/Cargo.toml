@@ -1,0 +1,17 @@
+[package]
+name = "vs-anomaly"
+description = "EWMA-based statistical anomaly detection for automotive signal monitoring"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

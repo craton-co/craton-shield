@@ -1,0 +1,36 @@
+[package]
+name = "vs-runtime-ind"
+description = "Industrial runtime extending CratonShield with Modbus, OPC UA, and PROFINET monitors"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+vs-types-ind = { path = "../types-ind" }
+vs-crypto = { path = "../../core/crypto" }
+vs-runtime = { path = "../../core/runtime" }
+vs-modbus-monitor = { path = "../modbus-monitor-ind", package = "vs-modbus-monitor-ind" }
+vs-opcua-monitor = { path = "../opcua-monitor" }
+vs-profinet-monitor = { path = "../profinet-monitor" }
+vs-ethernetip-monitor = { path = "../ethernetip-monitor" }
+vs-dnp3-monitor = { path = "../dnp3-monitor" }
+vs-bacnet-monitor = { path = "../bacnet-monitor" }
+vs-s7comm-monitor = { path = "../s7comm-monitor" }
+vs-iec60870-monitor = { path = "../iec60870-monitor" }
+vs-iec61850-monitor = { path = "../iec61850-monitor" }
+
+[dev-dependencies]
+vs-crypto = { path = "../../core/crypto", features = ["mock-hsm"] }
+
+[features]
+default = []
+capacity-large = ["vs-runtime/capacity-large"]
+capacity-xl = ["vs-runtime/capacity-xl"]
+
+[lints]
+workspace = true

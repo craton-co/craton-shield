@@ -1,0 +1,17 @@
+[package]
+name = "vs-ethernetip-monitor"
+description = "EtherNet/IP (CIP) intrusion detection for Craton Shield (IEC 62443)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+vs-types = { path = "../../core/types" }
+vs-types-ind = { path = "../types-ind" }
+
+[lints]
+workspace = true

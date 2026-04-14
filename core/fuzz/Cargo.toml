@@ -1,0 +1,68 @@
+[package]
+name = "cratonshield-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+vs-types = { path = "../types" }
+vs-crypto = { path = "../crypto", features = ["mock-hsm"] }
+vs-can-monitor = { path = "../can-monitor", features = ["testing"] }
+vs-eth-monitor = { path = "../eth-monitor" }
+vs-ota-validator = { path = "../ota-validator", features = ["json"] }
+vs-netfw = { path = "../netfw" }
+vs-policy-engine = { path = "../policy-engine" }
+vs-integrity = { path = "../integrity" }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_eth_parse"
+path = "fuzz_targets/fuzz_eth_parse.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_can_frame"
+path = "fuzz_targets/fuzz_can_frame.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_nonce_counter"
+path = "fuzz_targets/fuzz_nonce_counter.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_ota_json"
+path = "fuzz_targets/fuzz_ota_json.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_firewall"
+path = "fuzz_targets/fuzz_firewall.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_policy_eval"
+path = "fuzz_targets/fuzz_policy_eval.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_integrity"
+path = "fuzz_targets/fuzz_integrity.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_eth_packet"
+path = "fuzz_targets/fuzz_eth_packet.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_crypto_aead"
+path = "fuzz_targets/fuzz_crypto_aead.rs"
+doc = false

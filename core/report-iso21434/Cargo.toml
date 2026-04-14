@@ -1,0 +1,18 @@
+[package]
+name = "vs-report-iso21434"
+description = "Craton Shield ISO/SAE 21434 TARA (Threat Analysis and Risk Assessment) report generator"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { path = "../types" }
+
+[lints]
+workspace = true

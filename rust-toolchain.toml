@@ -1,0 +1,19 @@
+# Craton Shield toolchain pin.
+#
+# Pins the workspace to a specific stable Rust release so that all
+# contributors, CI runners, and downstream integrators build with the
+# same compiler. This eliminates "works on my machine" failures caused
+# by toolchain drift and ensures MSRV compliance is tested consistently.
+#
+# To update: change the channel below and verify the workspace compiles
+# with `cargo check --workspace`. Record the version bump in CHANGELOG.md
+# and CONTRIBUTING.md.
+#
+# The `components` list includes rustfmt and clippy so that `cargo fmt`
+# and `cargo clippy` use the pinned version rather than whatever is
+# installed globally — important for reproducible lint results in CI.
+
+[toolchain]
+channel = "1.82"
+components = ["rustfmt", "clippy", "rust-src"]
+targets   = ["thumbv7em-none-eabihf"]
