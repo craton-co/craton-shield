@@ -191,7 +191,7 @@ jobs:
           cargo llvm-cov --workspace --lcov --output-path lcov-pq.info \
             --features vs-crypto/pq-software,vs-crypto/software
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@0565863a31f2c772f9f0395002a31e3f06189574 # v5.4.0
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
         with:
           files: lcov-default.info,lcov-pq.info
           fail_ci_if_error: false
