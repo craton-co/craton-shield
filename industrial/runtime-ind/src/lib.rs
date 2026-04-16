@@ -355,7 +355,7 @@ impl<C: CryptoProvider + Clone> IndustrialShield<C> {
 
     /// Submit a Modbus TCP frame for inspection.
     pub fn submit_modbus_tcp(&mut self, frame: &ModbusTcpFrame, ts_us: u64) -> ModbusInspectResult {
-        let mut result = self.modbus_monitor.inspect_tcp(frame);
+        let (_verdict, mut result) = self.modbus_monitor.inspect_tcp(frame);
 
         if result.alert_count > 0 {
             let payload_hash =
@@ -403,7 +403,7 @@ impl<C: CryptoProvider + Clone> IndustrialShield<C> {
 
     /// Submit a Modbus RTU frame for inspection.
     pub fn submit_modbus_rtu(&mut self, frame: &ModbusRtuFrame, ts_us: u64) -> ModbusInspectResult {
-        let mut result = self.modbus_monitor.inspect_rtu(frame);
+        let (_verdict, mut result) = self.modbus_monitor.inspect_rtu(frame);
 
         if result.alert_count > 0 {
             let payload_hash =
@@ -1466,6 +1466,39 @@ mod tests {
         std::boxed::Box::new(IndustrialShield::init(PlatformConfig::default(), TestCrypto).unwrap())
     }
 
+    fn read_holding_tcp() -> ModbusTcpFrame {
+        let mut f = ModbusTcpFrame {
+            transaction_id: 1,
+            unit_id: 1,
+            raw_function_code: 0x03,
+            start_address: 0,
+            quantity: 1,
+            pdu_len: 5,
+            timestamp_us: 1_000,
+            ..ModbusTcpFrame::default()
+        };
+        f.pdu_data[0] = 0x03;
+        f.pdu_data[1..3].copy_from_slice(&0u16.to_be_bytes());
+        f.pdu_data[3..5].copy_from_slice(&1u16.to_be_bytes());
+        f
+    }
+
+    fn read_holding_rtu() -> ModbusRtuFrame {
+        let mut f = ModbusRtuFrame {
+            slave_addr: 1,
+            raw_function_code: 0x03,
+            start_address: 0,
+            quantity: 1,
+            pdu_len: 5,
+            timestamp_us: 1_000,
+            ..ModbusRtuFrame::default()
+        };
+        f.pdu_data[0] = 0x03;
+        f.pdu_data[1..3].copy_from_slice(&0u16.to_be_bytes());
+        f.pdu_data[3..5].copy_from_slice(&1u16.to_be_bytes());
+        f
+    }
+
     #[test]
     fn industrial_init_succeeds() {
         let shield = IndustrialShield::init(PlatformConfig::default(), TestCrypto);
@@ -1502,7 +1535,7 @@ mod tests {
     #[test]
     fn industrial_modbus_tcp_integration() {
         let mut shield = make_shield();
-        let f = ModbusTcpFrame::default();
+        let f = read_holding_tcp();
         let r = shield.submit_modbus_tcp(&f, 1000);
         assert!(r.allowed);
     }
@@ -1524,7 +1557,7 @@ mod tests {
     #[test]
     fn industrial_modbus_rtu_integration() {
         let mut shield = make_shield();
-        let f = ModbusRtuFrame::default();
+        let f = read_holding_rtu();
         let r = shield.submit_modbus_rtu(&f, 1000);
         assert!(r.allowed);
     }
@@ -1773,7 +1806,7 @@ mod tests {
             .add_conduit(1, 2, vs_types_ind::PROTO_MODBUS_TCP)
             .unwrap();
 
-        let f = ModbusTcpFrame::default();
+        let f = read_holding_tcp();
         let r = shield.submit_modbus_tcp_zoned(&f, 1, 2, 1000);
         assert!(r.is_ok());
         assert!(r.unwrap().allowed);
@@ -2497,7 +2530,7 @@ mod tests {
             .add_conduit(1, 2, vs_types_ind::PROTO_MODBUS_RTU)
             .unwrap();
 
-        let f = ModbusRtuFrame::default();
+        let f = read_holding_rtu();
         let r = shield.submit_modbus_rtu_zoned(&f, 1, 2, 1000);
         assert!(r.is_ok());
         assert!(r.unwrap().allowed);

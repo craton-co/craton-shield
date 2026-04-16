@@ -72,6 +72,9 @@ cargo test --workspace
 
 # Run the local CI script (mirrors GitHub Actions)
 ./scripts/local-ci.sh --fast
+
+# Or run the same checks inside Docker (matches CI's Linux runner)
+./scripts/local-ci-docker.sh --fast
 ```
 
 ### Workspace Structure
