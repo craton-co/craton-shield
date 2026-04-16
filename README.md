@@ -65,6 +65,9 @@ cargo check --target thumbv7em-none-eabihf -p vs-types -p vs-crypto -p vs-runtim
 
 # Run local CI (mirrors GitHub Actions)
 ./scripts/local-ci.sh --fast
+
+# Or run inside a Linux container that mirrors the GitHub Actions runner
+./scripts/local-ci-docker.sh --fast
 ```
 
 ## Workspace
