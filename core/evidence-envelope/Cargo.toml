@@ -1,0 +1,20 @@
+[package]
+name = "vs-evidence-envelope"
+description = "Structured metadata envelope for compliance/audit reports (no cryptographic signing or tamper detection — see crate docs)"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

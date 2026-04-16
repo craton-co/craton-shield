@@ -1,0 +1,26 @@
+[package]
+name = "vs-coap-monitor"
+description = "CoAP protocol intrusion detection for Craton Shield"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+vs-types.workspace = true
+vs-types-embedded.workspace = true
+
+[features]
+default = []
+capacity-large = ["vs-types-embedded/capacity-large"]
+capacity-xl = ["vs-types-embedded/capacity-xl"]
+
+[lints]
+workspace = true

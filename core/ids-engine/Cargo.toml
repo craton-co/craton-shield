@@ -1,0 +1,32 @@
+[package]
+name = "vs-ids-engine"
+description = "Alert correlation engine combining CAN and Ethernet IDS subsystems"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types.workspace = true
+vs-can-monitor.workspace = true
+vs-eth-monitor.workspace = true
+
+[dev-dependencies]
+vs-can-monitor = { workspace = true, features = ["testing"] }
+vs-eth-monitor.workspace = true
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "valid_count_shortcircuit"
+harness = false
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

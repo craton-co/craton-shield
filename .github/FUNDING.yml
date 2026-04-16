@@ -1,0 +1,12 @@
+# Funding sources for craton-shield.
+#
+# Craton Shield is developed by Craton Software Company. Commercial support,
+# certification assistance (ISO/SAE 21434, ISO 26262, IEC 62443, IEC 62304),
+# and the enterprise edition fund ongoing open-source development.
+#
+# See ROADMAP.md and SUPPORT.md for the enterprise-edition track.
+
+github: [craton-co]
+custom:
+  - "https://craton.com.ar/sponsor"
+  - "https://craton.com.ar/enterprise"

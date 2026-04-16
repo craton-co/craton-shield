@@ -1,0 +1,41 @@
+[package]
+name = "vs-runtime-ind"
+description = "Industrial runtime extending CratonShield with Modbus, OPC UA, and PROFINET monitors"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+readme.workspace = true
+homepage.workspace = true
+
+[dependencies]
+vs-types = { workspace = true }
+vs-types-ind = { workspace = true }
+vs-crypto = { workspace = true }
+vs-runtime = { workspace = true }
+vs-modbus-monitor = { path = "../modbus-monitor-ind", version = "0.7.0", package = "vs-modbus-monitor-ind" }
+vs-opcua-monitor = { workspace = true }
+vs-profinet-monitor = { workspace = true }
+vs-ethernetip-monitor = { workspace = true }
+vs-dnp3-monitor = { workspace = true }
+vs-bacnet-monitor = { workspace = true }
+vs-s7comm-monitor = { workspace = true }
+vs-iec60870-monitor = { workspace = true }
+vs-iec61850-monitor = { workspace = true }
+
+[dev-dependencies]
+vs-crypto = { workspace = true, features = ["mock-hsm"] }
+
+[features]
+default = []
+capacity-large = ["vs-runtime/capacity-large"]
+capacity-xl = ["vs-runtime/capacity-xl"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

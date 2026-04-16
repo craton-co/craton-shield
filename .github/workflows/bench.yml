@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Performance budget CI: runs the criterion bench suite on every push to
+# main and on PRs touching code paths likely to affect hot-path latency.
+#
+# Goals:
+#   1. Detect performance regressions in the hot path (CAN frame, ETH
+#      inspection, firewall, policy engine, event log) before they merge.
+#   2. Produce a downloadable criterion HTML/JSON artifact for offline review.
+#   3. Provide a baseline-comparison step (manual today, automated via critcmp
+#      once the baseline storage lands -- see PERFORMANCE.md for the policy).
+#
+# The criterion-bench job is *not* a required check: failure does not block a
+# merge. Reviewers are expected to inspect the artifact when latency-sensitive
+# code (anything called from runtime::tick or submit_can_frame) is touched.
+#
+# Performance budget (mirrored from PERFORMANCE.md, sourced from
+# core/docs/performance-results.md):
+#
+#   CAN frame submission             <=  300 ns  (target: 265 ns)
+#   Ethernet packet inspection       <=   40 ns  (target:  28 ns)
+#   ETH inspection (rejected)        <=  200 ns  (target: 158 ns)
+#   Firewall (128 rules, first)      <=   15 ns  (target:   9 ns)
+#   Firewall (128 rules, last)       <=  200 ns  (target: 166 ns)
+#   Policy engine (64 rules)         <=  250 ns  (target: 199 ns)
+#   Event log append (HMAC-chained)  <=  130 ns  (target: 108 ns)
+#   Runtime tick (idle)              <=  100 ns  (target:  73 ns)
+#   Runtime submit_can_frame         <=  300 ns  (target: 265 ns)
+#   AES-128-GCM encrypt (256 B)      <= 1100 ns  (target: 907 ns)
+
+name: Bench
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'core/**'
+      - 'auto/**'
+      - 'embedded/**'
+      - 'industrial/**'
+      - 'Cargo.toml'
+      - '.github/workflows/bench.yml'
+  # Allow manual dispatch when investigating a regression locally surfaced.
+  workflow_dispatch:
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  criterion-bench:
+    name: Criterion bench (workspace, all features)
+    runs-on: ubuntu-latest
+    # Bench runs are slow (~10-15 min for the full suite); cap conservatively
+    # so a misconfigured workflow never burns hours of CI time.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable @ 2026-01-15
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+        with:
+          # Keep bench target/ separate from build-and-test target/ so the
+          # release-with-debug-assertions profile bench uses isn't poisoned by
+          # the dev profile used in the test job.
+          shared-key: criterion-bench
+
+      - name: Show CPU info (helps diagnose runner-to-runner variance)
+        run: |
+          lscpu | head -25
+          cat /proc/cpuinfo | grep -E '^(model name|cpu MHz)' | head -4
+
+      - name: Run criterion benches (workspace, all features)
+        # --no-fail-fast: collect every bench's results even if one panics,
+        # because a single broken bench shouldn't hide the rest of the suite.
+        run: |
+          cargo bench --workspace --all-features --no-fail-fast \
+            -- --output-format bencher 2>&1 | tee bench-output.txt
+
+      - name: Upload criterion HTML/JSON artifact
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45601f # v4.6.0
+        with:
+          name: criterion-${{ github.sha }}
+          path: |
+            target/criterion/**
+            bench-output.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+      # Baseline-comparison step.
+      #
+      # critcmp compares two criterion runs; we cannot store a baseline inside
+      # the workflow itself (artifact retention is bounded and cross-run access
+      # is awkward without a separate storage backend). Until we wire up a
+      # baseline bucket, this step is a placeholder that documents the manual
+      # review the maintainer must perform when latency-sensitive code lands.
+      #
+      # Manual review steps (see PERFORMANCE.md "Reviewing a bench run"):
+      #   1. Download the criterion-<sha> artifact from this run.
+      #   2. Download the same artifact from the PR's merge-base commit.
+      #   3. Run: critcmp baseline.json pr.json
+      #   4. Investigate any > 5% regression on a budgeted operation.
+      - name: Baseline comparison (manual review reminder)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "::notice title=Manual bench review::Download the criterion artifact and compare against main using 'critcmp'. See PERFORMANCE.md for the >5% regression policy."
+
+  # Lightweight summary job so branch-protection rules can require *something*
+  # from the bench workflow without making the slow bench itself blocking.
+  bench-summary:
+    name: Bench summary
+    needs: criterion-bench
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report bench status
+        run: |
+          if [ "${{ needs.criterion-bench.result }}" = "success" ]; then
+            echo "Criterion bench succeeded. Inspect the criterion-${{ github.sha }} artifact for per-operation numbers."
+          else
+            echo "Criterion bench did not succeed (result: ${{ needs.criterion-bench.result }})."
+            echo "This is informational only -- bench failure does not block merge."
+          fi

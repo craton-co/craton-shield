@@ -1,0 +1,19 @@
+[package]
+name = "vs-integrity"
+description = "Memory region integrity monitoring with constant-time SHA-256 verification"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { path = "../types" }
+vs-crypto = { path = "../crypto" }
+
+[lints]
+workspace = true

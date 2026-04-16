@@ -1,0 +1,28 @@
+[package]
+name = "vs-lora-monitor"
+description = "LoRa / LoRaWAN intrusion detection for Craton Shield"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[dependencies]
+vs-types = { workspace = true }
+vs-types-embedded = { workspace = true }
+aes = { version = "0.8", default-features = false }
+cmac = { version = "0.7", default-features = false }
+
+[features]
+default = []
+capacity-large = ["vs-types-embedded/capacity-large"]
+capacity-xl = ["vs-types-embedded/capacity-xl"]
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

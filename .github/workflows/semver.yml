@@ -1,0 +1,38 @@
+name: SemVer check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  semver-check:
+    name: cargo semver-checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70 # v2.44.47
+        with:
+          tool: cargo-semver-checks
+      - name: Run semver-checks against the latest published release
+        # `check-release` compares the current workspace against the most recent
+        # version published on crates.io for each member crate. New crates that
+        # have never been published are skipped automatically.
+        #
+        # Failures here indicate an unintended SemVer-breaking change. To allow
+        # an intentional break, bump the MAJOR version of the affected crate
+        # and document the removed/changed items in CHANGELOG.md and
+        # DEPRECATION.md.
+        run: cargo semver-checks check-release --workspace

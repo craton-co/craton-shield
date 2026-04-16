@@ -1,0 +1,73 @@
+# Dependabot configuration for craton-shield.
+#
+# - Cargo ecosystem is scanned weekly at the workspace root. The workspace
+#   dependency graph means a single cargo entry covers every member crate.
+# - GitHub Actions versions are also tracked so CI pinning stays current.
+# - All PRs are routed through the core maintainers and, for cargo bumps,
+#   the security team as an additional reviewer because dependency updates
+#   can carry CVE fixes.
+#
+# See RELEASING.md for the manual `cargo audit` / `cargo deny` workflow that
+# this file automates on a recurring schedule.
+
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: scope
+    reviewers:
+      - craton-co/core-maintainers
+      - craton-co/security-team
+    assignees:
+      - craton-co/core-maintainers
+    groups:
+      rustcrypto:
+        patterns:
+          - "aes*"
+          - "sha2"
+          - "hmac"
+          - "p256"
+          - "ecdsa"
+          - "signature"
+          - "subtle"
+          - "zeroize"
+      dev-dependencies:
+        dependency-type: "development"
+    ignore:
+      # Pinned via workspace MSRV (1.82); bumps here must be manual so MSRV
+      # doesn't drift without a coordinated CHANGELOG entry.
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "ci"
+      include: scope
+    reviewers:
+      - craton-co/core-maintainers
+    assignees:
+      - craton-co/core-maintainers

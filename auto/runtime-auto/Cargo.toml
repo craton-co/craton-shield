@@ -1,0 +1,55 @@
+[package]
+name = "vs-runtime-auto"
+description = "Automotive runtime extending CratonShield with signal IDS, V2X, and UDS diagnostics"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+homepage.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+vs-types = { workspace = true }
+vs-types-auto = { workspace = true }
+vs-crypto = { workspace = true }
+vs-runtime = { workspace = true }
+vs-signal-ids = { workspace = true }
+vs-v2x = { workspace = true }
+vs-diag-gateway = { workspace = true }
+vs-can-monitor = { workspace = true }
+
+[dev-dependencies]
+vs-crypto = { workspace = true, features = ["mock-hsm"] }
+vs-policy-engine = { workspace = true }
+vs-netfw = { workspace = true }
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "digest_threading"
+harness = false
+
+[features]
+default = []
+stub = []
+capacity-large = ["vs-runtime/capacity-large"]
+capacity-xl = ["vs-runtime/capacity-xl"]
+# Heap-allocate large subsystems (V2X replay cache, audit log) to reduce
+# stack frame size. Use on `std`-capable targets (Linux/QNX gateway ECUs)
+# where stack space is limited but heap is available.
+heap-subsystems = []
+# Use shift-XOR mixing instead of 64-bit multiplications for alert ID
+# generation. Suitable for Cortex-M0/M0+ targets without hardware multiply.
+# Slightly higher collision rate but avoids expensive software multiply.
+mix-shift-xor = []
+# Pull in the post-quantum crypto stack (ML-KEM-768 + ML-DSA-65, FIPS
+# 203/204) via `vs-crypto/pq`.  Recommended on for v1.0 automotive
+# production deployments — see `vs-crypto` crate-level docs.
+pq = ["vs-runtime/pq", "vs-crypto/pq"]
+
+[lints]
+workspace = true

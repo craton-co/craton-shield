@@ -1,0 +1,36 @@
+[package]
+name = "vs-can-monitor"
+description = "CAN/CAN-FD intrusion detection with flood, DLC, allowlist, and entropy analysis"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+testing = []
+capacity-large = []
+capacity-xl = []
+
+[dependencies]
+vs-types.workspace = true
+subtle = { version = "2", default-features = false }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "entropy_fastpath"
+harness = false
+required-features = ["testing"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

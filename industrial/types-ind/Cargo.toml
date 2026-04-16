@@ -1,0 +1,20 @@
+[package]
+name = "vs-types-ind"
+description = "Industrial automation type extensions for Craton Shield (IEC 62443)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+vs-types.workspace = true
+
+[lints]
+workspace = true

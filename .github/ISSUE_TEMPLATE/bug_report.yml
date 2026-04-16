@@ -1,0 +1,76 @@
+name: Bug Report
+description: Report a bug to help us improve Craton Shield
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug! Please fill out the information below to help us investigate.
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        - Craton Shield version (e.g., 0.7.0)
+        - Rust version (rustc --version)
+        - Target (e.g., x86_64-unknown-linux-gnu, thumbv7em-none-eabihf)
+        - OS (e.g., Linux 6.x, bare-metal)
+        - Feature flags (e.g., mock-hsm, capacity-large)
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this behavior?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs/Output
+      description: Please paste any relevant logs, errors, or stack traces.
+      render: shell
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      description: Which domain does this affect?
+      options:
+        - Core (shared primitives)
+        - Automotive (auto/)
+        - Embedded IoT (embedded/)
+        - Industrial OT/ICS (industrial/)
+        - Cross-domain
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Verification
+      options:
+        - label: I have searched existing issues to ensure this bug hasn't already been reported.
+          required: true
+        - label: I have confirmed this bug exists with the latest `main` branch.
+          required: true

@@ -1,0 +1,28 @@
+[package]
+name = "vs-hal"
+description = "Hardware abstraction layer traits for CAN, Ethernet, Timer, and HSM"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+stub-hsm = []
+# Forward-looking, experimental: surfaces the `Tpm2Transport` trait stub for
+# downstream consumers to prototype a real TPM 2.0 TIS/CRB transport. The
+# API is NOT finalized — do not implement in production until v1.0.
+tpm2-experimental = []
+
+[dependencies]
+vs-types.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

@@ -1,0 +1,57 @@
+[package]
+name = "vs-runtime-embedded"
+description = "Lightweight IoT/embedded runtime orchestrating MQTT, CoAP, BLE, Zigbee, LoRa, and Modbus security monitors for Craton Shield"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+homepage.workspace = true
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+vs-types.workspace = true
+vs-types-embedded.workspace = true
+vs-crypto.workspace = true
+vs-runtime.workspace = true
+vs-mqtt-monitor.workspace = true
+vs-coap-monitor.workspace = true
+vs-ble-monitor.workspace = true
+vs-zigbee-monitor.workspace = true
+vs-lora-monitor.workspace = true
+vs-modbus-monitor = { path = "../modbus-monitor-emb", version = "0.7.0", package = "vs-modbus-monitor-emb" }
+
+[dev-dependencies]
+vs-crypto = { workspace = true, features = ["mock-hsm"] }
+
+[features]
+default = []
+# Enables deprecated `*_mut()` accessors that bypass security encapsulation.
+# Only effective when debug_assertions are enabled (dev/test builds).
+# Do not enable in production builds.
+direct-access = []
+capacity-large = [
+    "vs-runtime/capacity-large",
+    "vs-mqtt-monitor/capacity-large",
+    "vs-coap-monitor/capacity-large",
+    "vs-ble-monitor/capacity-large",
+    "vs-zigbee-monitor/capacity-large",
+    "vs-lora-monitor/capacity-large",
+    "vs-modbus-monitor/capacity-large",
+]
+capacity-xl = [
+    "vs-runtime/capacity-xl",
+    "vs-mqtt-monitor/capacity-xl",
+    "vs-coap-monitor/capacity-xl",
+    "vs-ble-monitor/capacity-xl",
+    "vs-zigbee-monitor/capacity-xl",
+    "vs-lora-monitor/capacity-xl",
+    "vs-modbus-monitor/capacity-xl",
+]
+
+[lints]
+workspace = true

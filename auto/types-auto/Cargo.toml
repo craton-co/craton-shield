@@ -1,0 +1,21 @@
+[package]
+name = "vs-types-auto"
+description = "Automotive-specific types for Craton Shield (VehicleId helpers, BusType, source constants)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+vs-types.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

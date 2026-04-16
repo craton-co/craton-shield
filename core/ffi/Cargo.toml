@@ -1,0 +1,52 @@
+[package]
+name = "vs-ffi"
+description = "C-compatible FFI bindings for Craton Shield platform integration"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# Enable the "production" feature in release builds to ensure the stub
+# CryptoProvider is excluded. The crate will fail to compile with this
+# feature unless a real CryptoProvider is wired in.
+production = []
+# Enables the mock HSM for non-production builds. Disable this feature
+# (and enable `production`) when wiring in a real CryptoProvider.
+mock-hsm = ["vs-crypto/mock-hsm"]
+# Enable real ML-KEM-768 / ML-DSA-65 post-quantum C ABI functions.
+# Adds `vs_pq_provision_mlkem_key`, `vs_pq_mlkem_encapsulate`,
+# `vs_pq_mlkem_decapsulate`, `vs_pq_mldsa_sign`, `vs_pq_mldsa_verify`
+# to the exported C ABI.
+#
+# Pulls in the upgraded `ml-kem` / `ml-dsa` stack via `vs-crypto/pq`
+# (which is the recommended-on feature for v1.0 production deployments —
+# see `vs-crypto` crate-level docs and the version-pin policy at the
+# top of `core/crypto/src/pq.rs`).  The C ABI itself is unchanged by
+# the v1.0 dep upgrade.
+pqc = ["vs-runtime/pq", "vs-crypto/pq"]
+
+[lib]
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+vs-types = { workspace = true }
+vs-crypto = { workspace = true }
+vs-runtime = { workspace = true }
+
+[lints]
+workspace = true
+
+# Render the documented public API on docs.rs. Without a feature, the bulk
+# of the C ABI (vs_platform_init, vs_submit_*, etc.) is `#[cfg]`-gated and
+# would not appear in the rendered docs.
+[package.metadata.docs.rs]
+features = ["mock-hsm"]
+all-features = false
+rustdoc-args = ["--cfg", "docsrs"]

@@ -1,0 +1,57 @@
+[package]
+name = "vs-runtime"
+description = "Craton Shield platform orchestrator managing all security subsystems"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+vs-types.workspace = true
+vs-crypto.workspace = true
+vs-key-manager.workspace = true
+vs-secure-boot.workspace = true
+vs-can-monitor.workspace = true
+vs-eth-monitor.workspace = true
+vs-ids-engine.workspace = true
+vs-anomaly.workspace = true
+vs-integrity.workspace = true
+vs-netfw.workspace = true
+vs-ota-validator.workspace = true
+vs-event-logger.workspace = true
+vs-policy-engine.workspace = true
+vs-storage.workspace = true
+vs-hal.workspace = true
+
+[dev-dependencies]
+vs-crypto = { workspace = true, features = ["mock-hsm"] }
+vs-types.workspace = true
+vs-policy-engine.workspace = true
+vs-netfw.workspace = true
+vs-can-monitor.workspace = true
+vs-eth-monitor.workspace = true
+vs-event-logger.workspace = true
+vs-integrity.workspace = true
+vs-key-manager.workspace = true
+vs-ota-validator.workspace = true
+
+[features]
+default = []
+capacity-large = []
+capacity-xl = []
+## Enable real ML-KEM-768 / ML-DSA-65 post-quantum cryptography (FIPS 203/204).
+## Requires nightly or a stable toolchain that ships the `ml-kem` / `ml-dsa`
+## RustCrypto crates.  Disabled by default; use `StubPostQuantumProvider`
+## otherwise.
+pq = ["vs-crypto/pq"]
+
+[lints]
+workspace = true

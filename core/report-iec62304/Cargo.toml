@@ -1,0 +1,38 @@
+[package]
+name = "vs-report-iec62304"
+description = "Craton Shield IEC 62304 software safety traceability matrix generator. Unofficial IEC 62304 traceability helper; not an official IEC product."
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { workspace = true }
+vs-evidence-envelope = { workspace = true }
+
+[dependencies.criterion]
+version = "0.5"
+default-features = false
+features = ["cargo_bench_support"]
+optional = true
+
+[features]
+default = []
+# Enables criterion benches under benches/.
+bench = ["dep:criterion"]
+
+[[bench]]
+name = "trace_index"
+harness = false
+required-features = ["bench"]
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

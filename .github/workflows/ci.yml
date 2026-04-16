@@ -1,0 +1,198 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  RUST_BACKTRACE: 1
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable @ 2026-01-15
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  build-and-test:
+    name: Build and test
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Build workspace
+        run: cargo build --workspace --verbose
+      - name: Run tests (default features)
+        run: cargo test --workspace --verbose
+      - name: Run tests (software crypto + PQ software features)
+        run: cargo test --workspace --verbose --features vs-crypto/pq-software,vs-crypto/software
+
+  clippy:
+    name: Clippy linting
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Clippy check
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  check-no-std:
+    name: Check no_std (thumbv7em-none-eabihf)
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Check core crates for no_std
+        run: |
+          cargo check --target thumbv7em-none-eabihf -p vs-types
+          cargo check --target thumbv7em-none-eabihf -p vs-hal
+          cargo check --target thumbv7em-none-eabihf -p vs-crypto
+          cargo check --target thumbv7em-none-eabihf -p vs-can-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-eth-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-ids-engine
+          cargo check --target thumbv7em-none-eabihf -p vs-anomaly
+          cargo check --target thumbv7em-none-eabihf -p vs-integrity
+          cargo check --target thumbv7em-none-eabihf -p vs-netfw
+          cargo check --target thumbv7em-none-eabihf -p vs-ota-validator
+          cargo check --target thumbv7em-none-eabihf -p vs-event-logger
+          cargo check --target thumbv7em-none-eabihf -p vs-policy-engine
+          cargo check --target thumbv7em-none-eabihf -p vs-key-manager
+          cargo check --target thumbv7em-none-eabihf -p vs-secure-boot
+          cargo check --target thumbv7em-none-eabihf -p vs-storage
+          cargo check --target thumbv7em-none-eabihf -p vs-report-iso21434
+          cargo check --target thumbv7em-none-eabihf -p vs-report-iec62443
+          cargo check --target thumbv7em-none-eabihf -p vs-report-iec62304
+          cargo check --target thumbv7em-none-eabihf -p vs-runtime
+      - name: Check auto crates for no_std
+        run: |
+          cargo check --target thumbv7em-none-eabihf -p vs-types-auto
+          cargo check --target thumbv7em-none-eabihf -p vs-signal-ids
+          cargo check --target thumbv7em-none-eabihf -p vs-v2x
+          cargo check --target thumbv7em-none-eabihf -p vs-diag-gateway
+          cargo check --target thumbv7em-none-eabihf -p vs-autosar
+      - name: Check emb crates for no_std
+        run: |
+          cargo check --target thumbv7em-none-eabihf -p vs-types-embedded
+          cargo check --target thumbv7em-none-eabihf -p vs-mqtt-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-coap-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-ble-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-zigbee-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-lora-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-modbus-monitor-emb
+          cargo check --target thumbv7em-none-eabihf -p vs-runtime-embedded
+      - name: Check ind crates for no_std
+        run: |
+          cargo check --target thumbv7em-none-eabihf -p vs-types-ind
+          cargo check --target thumbv7em-none-eabihf -p vs-modbus-monitor-ind
+          cargo check --target thumbv7em-none-eabihf -p vs-opcua-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-profinet-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-ethernetip-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-dnp3-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-bacnet-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-s7comm-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-iec60870-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-iec61850-monitor
+          cargo check --target thumbv7em-none-eabihf -p vs-runtime-ind
+
+  audit:
+    name: Security audit
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  deny:
+    name: Deny check (licenses, advisories, bans)
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+      - uses: EmbarkStudios/cargo-deny-action@13fd9ef18c30518efe066a8ac36cd629cc377507 # v2.0.5
+        with:
+          command: check
+
+  doc:
+    name: Documentation
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --document-private-items
+
+  msrv:
+    name: MSRV (Rust 1.82)
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: "1.82"
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Check MSRV
+        run: cargo check --workspace
+
+  coverage:
+    name: Code coverage
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70 # v2.44.47
+        with:
+          tool: cargo-llvm-cov
+      - name: Generate coverage (default features)
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path lcov-default.info
+      - name: Generate coverage (PQ software features)
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path lcov-pq.info \
+            --features vs-crypto/pq-software,vs-crypto/software
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@0565863a31f2c772f9f0395002a31e3f06189574 # v5.4.0
+        with:
+          files: lcov-default.info,lcov-pq.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

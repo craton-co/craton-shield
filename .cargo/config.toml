@@ -1,0 +1,4 @@
+[env]
+# Increase minimum stack size for tests to accommodate large IndustrialShield struct
+# Default is 2MB on Windows, we need more for the test suite
+RUST_MIN_STACK = "8388608"  # 8MB

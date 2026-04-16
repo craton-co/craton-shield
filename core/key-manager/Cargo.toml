@@ -1,0 +1,42 @@
+[package]
+name = "vs-key-manager"
+description = "Key lifecycle management with zeroization and audit trails for Craton Shield"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { workspace = true }
+vs-crypto = { workspace = true }
+zeroize = { version = "1", default-features = false }
+
+[dev-dependencies]
+vs-crypto = { workspace = true, features = ["mock-hsm"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies.criterion]
+version = "0.5"
+default-features = false
+features = ["cargo_bench_support"]
+optional = true
+
+[features]
+default = []
+# Enables criterion benches under benches/.
+bench = ["dep:criterion"]
+
+[[bench]]
+name = "audit_append_after_wrap"
+harness = false
+required-features = ["bench"]
+
+[lints]
+workspace = true

@@ -1,0 +1,74 @@
+[package]
+name = "vs-ffi-auto"
+description = "Automotive C-compatible FFI bindings for Craton Shield"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+include = [
+    "src/**",
+    "vs_auto.h",
+    "cbindgen.toml",
+    "README.md",
+    "Cargo.toml",
+]
+
+[features]
+default = []
+production = []
+# Enable real ML-KEM-768 / ML-DSA-65 post-quantum C ABI functions for
+# automotive integrations.  Pulls in the upgraded `ml-kem` / `ml-dsa`
+# stack via `vs-crypto/pq` (recommended on for v1.0 production
+# deployments — see the version-pin policy at the top of
+# `core/crypto/src/pq.rs`).  The C ABI itself is unchanged by the
+# v1.0 dep upgrade — PQ functions remain feature-gated.
+pqc = ["vs-runtime-auto/pq", "vs-runtime/pq", "vs-crypto/pq"]
+
+[lib]
+# `rlib` is included so downstream Rust consumers (e.g. integration test
+# harnesses, internal tools) can link this crate as a normal Rust library
+# in addition to the C `staticlib`/`cdylib` shipped to external C callers.
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+vs-types = { workspace = true }
+vs-crypto = { workspace = true }
+vs-runtime = { workspace = true }
+vs-runtime-auto = { workspace = true }
+vs-diag-gateway = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "lock_strategy"
+harness = false
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"
+
+# Render the documented public API on docs.rs. Without the `production`
+# feature, `VsCryptoCallbacks` and `vs_auto_platform_init_with_crypto`
+# (and their associated `pqc` PQ surface) are `#[cfg]`-gated out of the
+# rendered docs.
+[package.metadata.docs.rs]
+features = ["production", "pqc"]
+all-features = false
+rustdoc-args = ["--cfg", "docsrs"]

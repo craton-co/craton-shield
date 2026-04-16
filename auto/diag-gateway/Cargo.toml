@@ -1,0 +1,26 @@
+[package]
+name = "vs-diag-gateway"
+description = "UDS diagnostics gateway with SecurityAccess brute-force protection"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+vs-types = { workspace = true }
+vs-crypto = { workspace = true }
+
+[dev-dependencies]
+vs-crypto = { workspace = true, features = ["mock-hsm"] }
+
+[features]
+stub = []
+
+[lints]
+workspace = true

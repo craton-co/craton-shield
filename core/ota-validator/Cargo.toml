@@ -1,0 +1,31 @@
+[package]
+name = "vs-ota-validator"
+description = "TUF/Uptane OTA update validation with rollback protection"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { workspace = true }
+vs-crypto = { workspace = true }
+vs-hal = { workspace = true }
+vs-storage = { workspace = true }
+subtle = { version = "2", default-features = false }
+serde = { version = "1", default-features = false, features = ["derive"], optional = true }
+serde-json-core = { version = "0.6", default-features = false, optional = true }
+
+[features]
+default = []
+json = ["dep:serde", "dep:serde-json-core"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

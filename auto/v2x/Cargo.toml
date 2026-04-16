@@ -1,0 +1,25 @@
+[package]
+name = "vs-v2x"
+description = "Craton Shield V2X communication security with IEEE 1609.2 validation"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+# Enable the stub validator that accepts all messages (testing only).
+stub = []
+
+[dependencies]
+vs-types = { workspace = true }
+vs-crypto = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

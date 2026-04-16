@@ -1,0 +1,23 @@
+[package]
+name = "vs-event-logger"
+description = "Tamper-evident HMAC-chained event logging ring buffer"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types = { workspace = true }
+vs-crypto = { workspace = true }
+subtle = { version = "2", default-features = false }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

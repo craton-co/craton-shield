@@ -1,0 +1,104 @@
+[package]
+name = "vs-crypto"
+description = "Cryptographic provider traits and post-quantum abstractions for Craton Shield"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+vs-types.workspace = true
+zeroize = { version = "1", default-features = false }
+subtle = { version = "2", default-features = false }
+
+# RustCrypto crates — only pulled in with the `software` feature.
+# All used with default-features = false for no_std compatibility.
+aes-gcm = { version = "0.10", default-features = false, features = ["aes"], optional = true }
+sha2 = { version = "0.10", default-features = false, optional = true }
+hmac = { version = "0.12", default-features = false, optional = true }
+hkdf = { version = "0.12", default-features = false, optional = true }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh"], optional = true }
+ecdsa = { version = "0.16", default-features = false, features = ["signing", "verifying"], optional = true }
+
+# ---------------------------------------------------------------------------
+# Post-quantum cryptography crates (FIPS 203 / FIPS 204).
+#
+# VERSION-PIN POLICY (v1.0):
+#   ML-KEM-768 and ML-DSA-65 are implemented by the RustCrypto `ml-kem` and
+#   `ml-dsa` crates. As of v1.0 prep, neither crate has reached a 1.0 stable
+#   release on crates.io:
+#     - `ml-kem`  : latest published is the 0.2.x line (pre-1.0).
+#     - `ml-dsa`  : latest published is the `0.1.0-rc.x` line (release candidate).
+#
+#   The PQC algorithm specs (FIPS 203, FIPS 204) and the upstream crate APIs
+#   are still evolving (encoded sizes, signing API, deterministic-seed handling),
+#   so we pin BOTH crates to EXACT versions using the `=`-prefix.  This prevents
+#   `cargo update` from silently upgrading us into an API break, which would
+#   compromise interoperability of stored keys / on-the-wire ciphertexts.
+#
+#   When upgrading these pins, run the full `pq_self_test_kats` (in src/pq.rs)
+#   plus the ML-KEM/ML-DSA round-trip integration tests, and confirm that the
+#   encoded-key/ciphertext/signature byte sizes match the constants in lib.rs.
+#
+#   See `src/pq.rs` (top-of-file comment) for the full rationale.
+# ---------------------------------------------------------------------------
+ml-kem = { version = "=0.2.1", default-features = false, optional = true }
+ml-dsa = { version = "=0.1.0-rc.3", default-features = false, optional = true }
+rand_core = { version = "0.6", default-features = false, optional = true }
+
+[features]
+default = []
+
+# Test-only insecure stub providers. NEVER enable in production builds.
+mock-hsm = []
+
+# Test-only insecure PQ stub. NEVER enable in production builds. Guarded by
+# `compile_error!` in lib.rs and by `vs_crypto_assert_not_mock` at runtime.
+pq-software = []
+
+# Software-backed classical crypto provider (AES-GCM, ECDSA-P256, ECDH-P256,
+# SHA-2, HMAC, HKDF) using the RustCrypto crates. Recommended for hosts that
+# do not have an HSM or TPM.
+software = ["dep:aes-gcm", "dep:sha2", "dep:hmac", "dep:hkdf", "dep:p256", "dep:ecdsa"]
+
+# Post-quantum crypto provider (ML-KEM-768 + ML-DSA-65, FIPS 203 / FIPS 204).
+#
+# RECOMMENDED FOR v1.0 PRODUCTION DEPLOYMENTS.
+#
+# Adds ~150 KB of code and ~20 KB of stack-resident polynomial state to the
+# binary. Disable only on tightly memory-constrained embedded targets where
+# the v1.0 hybrid-handshake migration is not yet required.
+#
+# Implies `dep:ml-kem`, `dep:ml-dsa`, and `dep:rand_core` (RustCrypto PQC
+# stack). All three deps are pinned tightly — see version-pin policy above.
+pq = ["dep:ml-kem", "dep:ml-dsa", "dep:rand_core"]
+
+# Optional one-slot LRU cache for reconstructed ML-KEM key pairs. Trades
+# ~8 KB of resident memory for ~10x speedup on repeated encap/decap with
+# the same slot. Implies `pq`.
+pq-cache = ["pq"]
+# Enables the criterion benches under benches/. Opt-in to keep the default
+# build path free of bench-only dev-deps.
+bench = ["dep:criterion"]
+
+[dependencies.criterion]
+version = "0.5"
+default-features = false
+features = ["cargo_bench_support"]
+optional = true
+
+[[bench]]
+name = "nonce_tracker_bloom"
+harness = false
+required-features = ["bench"]
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

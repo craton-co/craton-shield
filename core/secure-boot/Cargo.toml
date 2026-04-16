@@ -1,0 +1,31 @@
+[package]
+name = "vs-secure-boot"
+description = "Secure boot chain verification with PCR measurement for Craton Shield"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+default = []
+## Enable the `SoftwareTpm` type (test / dev only).
+software-tpm = []
+
+[dependencies]
+vs-types.workspace = true
+vs-crypto.workspace = true
+zeroize = { version = "1", default-features = false }
+
+[dev-dependencies]
+vs-crypto = { workspace = true, features = ["mock-hsm"] }
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+all-features = true

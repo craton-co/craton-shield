@@ -1,0 +1,1 @@
+{"signed":{"_type":"root","spec_version":"1.0.0","version":4294967295,"expires":"2099-01-01T00:00:00Z","consistent_snapshot":false,"keys":{},"roles":{"root":{"keyids":[],"threshold":1},"targets":{"keyids":[],"threshold":1},"snapshot":{"keyids":[],"threshold":1},"timestamp":{"keyids":[],"threshold":1}}},"signatures":[]}
