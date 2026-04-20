@@ -91,13 +91,13 @@ const CAN_ERR_BUSOFF: u32 = 0x0000_0040;
 const CAN_ERR_CRTL: u32 = 0x0000_0004;
 const CAN_ERR_ACK: u32 = 0x0000_0020;
 
-/// Bit positions in data[1] for controller state.
+/// Bit positions in `data[1]` for controller state.
 const CAN_ERR_CRTL_RX_OVERFLOW: u8 = 0x01;
 const CAN_ERR_CRTL_TX_OVERFLOW: u8 = 0x02;
 const CAN_ERR_CRTL_RX_PASSIVE: u8 = 0x10;
 const CAN_ERR_CRTL_TX_PASSIVE: u8 = 0x20;
 
-/// Bit positions in data[2] for protocol error type.
+/// Bit positions in `data[2]` for protocol error type.
 const CAN_ERR_PROT_BIT: u8 = 0x01;
 const CAN_ERR_PROT_FORM: u8 = 0x02;
 const CAN_ERR_PROT_STUFF: u8 = 0x04;
@@ -283,7 +283,7 @@ impl LinuxCanBus {
             // 2. Resolve interface name to index via libc::ifreq
             let mut ifr: libc::ifreq = core::mem::zeroed();
             for (i, &b) in interface.as_bytes().iter().enumerate() {
-                ifr.ifr_name[i] = b.cast_signed();
+                ifr.ifr_name[i] = b as libc::c_char;
             }
             if libc::ioctl(fd, SIOCGIFINDEX, &raw mut ifr) < 0 {
                 libc::close(fd);

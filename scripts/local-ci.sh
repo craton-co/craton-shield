@@ -252,7 +252,7 @@ job_audit() {
 job_deny() {
     if ! command -v cargo-deny &>/dev/null; then
         echo "Installing cargo-deny..."
-        cargo install cargo-deny --locked
+        cargo install cargo-deny --version 0.17.0 --locked
     fi
 
     # Workaround: cargo-deny's advisory DB parser fails on CRLF line endings.
@@ -350,15 +350,33 @@ printf "Jobs:     %s\n" "${JOBS_TO_RUN[*]}"
 printf "Layers:   %s\n" "$LAYER_DISPLAY"
 
 # Run each job
-if should_run fmt;       then run_job "fmt"       "Check formatting (cargo fmt)"     job_fmt;       fi
-if should_run clippy;    then run_job "clippy"    "Lint (clippy, deny warnings)"     job_clippy;    fi
-if should_run test;      then run_job "test"      "Run all tests"                    job_test;      fi
-if should_run thumbv7em; then run_job "thumbv7em" "Check no_std (Cortex-M target)"   job_thumbv7em; fi
-if should_run doc;       then run_job "doc"       "Build docs (warnings = errors)"   job_doc;       fi
-if should_run audit;     then run_job "audit"     "Security audit (cargo audit)"     job_audit;     fi
-if should_run deny;      then run_job "deny"      "Dependency policy (cargo deny)"   job_deny;      fi
-if should_run msrv;      then run_job "msrv"      "Check MSRV (Rust 1.82.0)"        job_msrv;      fi
-if should_run coverage;  then run_job "coverage"  "Code coverage (cargo-llvm-cov)"   job_coverage;  fi
+if should_run fmt; then
+    run_job "fmt" "Check formatting (cargo fmt)" job_fmt
+fi
+if should_run clippy; then
+    run_job "clippy" "Lint (clippy, deny warnings)" job_clippy
+fi
+if should_run test; then
+    run_job "test" "Run all tests" job_test
+fi
+if should_run thumbv7em; then
+    run_job "thumbv7em" "Check no_std (Cortex-M target)" job_thumbv7em
+fi
+if should_run doc; then
+    run_job "doc" "Build docs (warnings = errors)" job_doc
+fi
+if should_run audit; then
+    run_job "audit" "Security audit (cargo audit)" job_audit
+fi
+if should_run deny; then
+    run_job "deny" "Dependency policy (cargo deny)" job_deny
+fi
+if should_run msrv; then
+    run_job "msrv" "Check MSRV (Rust 1.82.0)" job_msrv
+fi
+if should_run coverage; then
+    run_job "coverage" "Code coverage (cargo-llvm-cov)" job_coverage
+fi
 
 # ---------------------------------------------------------------------------
 # Summary

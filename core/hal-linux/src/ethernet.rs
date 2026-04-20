@@ -161,7 +161,7 @@ impl LinuxEthernetPhy {
         for (i, &b) in interface.as_bytes().iter().enumerate() {
             // Cast u8 to i8 for libc ifreq compatibility (ASCII values are
             // identical in both signed and unsigned representation).
-            ifname[i] = b.cast_signed();
+            ifname[i] = b as libc::c_char;
         }
 
         // SAFETY: creating a raw AF_PACKET socket. All pointers are to valid
@@ -179,7 +179,7 @@ impl LinuxEthernetPhy {
             // Resolve interface name to index
             let mut ifr: libc::ifreq = core::mem::zeroed();
             for (i, &b) in interface.as_bytes().iter().enumerate() {
-                ifr.ifr_name[i] = b.cast_signed();
+                ifr.ifr_name[i] = b as libc::c_char;
             }
             if libc::ioctl(fd, libc::SIOCGIFINDEX as libc::c_ulong, &raw mut ifr) < 0 {
                 libc::close(fd);
@@ -440,6 +440,6 @@ mod tests {
     #[test]
     fn interface_with_path_separator_rejected_at_open() {
         let result = LinuxEthernetPhy::new("../../etc");
-        assert_eq!(result, Err(VsError::InvalidInput));
+        assert!(matches!(result, Err(VsError::InvalidInput)));
     }
 }
