@@ -3,6 +3,7 @@ name = "vs-types"
 description = "Core types, error enums, and vehicle identity for Craton Shield"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

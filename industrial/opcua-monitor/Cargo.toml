@@ -3,6 +3,7 @@ name = "vs-opcua-monitor"
 description = "OPC UA security monitor for Craton Shield (IEC 62443)"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"

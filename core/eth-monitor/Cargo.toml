@@ -3,6 +3,7 @@ name = "vs-eth-monitor"
 description = "Automotive Ethernet intrusion detection with SOME/IP, DoIP, and ARP monitoring"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

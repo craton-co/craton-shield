@@ -3,6 +3,7 @@ name = "vs-report-iec62304"
 description = "Craton Shield IEC 62304 software safety traceability matrix generator. Unofficial IEC 62304 traceability helper; not an official IEC product."
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

@@ -3,6 +3,7 @@ name = "vs-netfw"
 description = "Automotive Ethernet firewall with token-bucket rate limiting and dynamic rules"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

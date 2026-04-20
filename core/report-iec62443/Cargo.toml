@@ -3,6 +3,7 @@ name = "vs-report-iec62443"
 description = "Craton Shield IEC 62443-4-2 Security Level compliance assessor. Unofficial IEC 62443 self-assessment helper; not an official IEC/ISA product."
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

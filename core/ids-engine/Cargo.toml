@@ -3,6 +3,7 @@ name = "vs-ids-engine"
 description = "Alert correlation engine combining CAN and Ethernet IDS subsystems"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

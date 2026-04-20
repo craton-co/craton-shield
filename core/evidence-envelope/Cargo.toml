@@ -3,6 +3,7 @@ name = "vs-evidence-envelope"
 description = "Structured metadata envelope for compliance/audit reports (no cryptographic signing or tamper detection — see crate docs)"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

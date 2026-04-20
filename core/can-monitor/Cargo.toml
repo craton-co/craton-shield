@@ -3,6 +3,7 @@ name = "vs-can-monitor"
 description = "CAN/CAN-FD intrusion detection with flood, DLC, allowlist, and entropy analysis"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

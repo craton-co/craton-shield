@@ -3,6 +3,7 @@ name = "vs-ffi"
 description = "C-compatible FFI bindings for Craton Shield platform integration"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

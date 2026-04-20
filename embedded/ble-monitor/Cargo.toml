@@ -3,6 +3,7 @@ name = "vs-ble-monitor"
 description = "BLE connection intrusion detection for Craton Shield"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true

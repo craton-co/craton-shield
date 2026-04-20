@@ -3,6 +3,7 @@ name = "vs-key-manager"
 description = "Key lifecycle management with zeroization and audit trails for Craton Shield"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

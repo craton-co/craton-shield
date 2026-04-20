@@ -3,6 +3,7 @@ name = "vs-types-embedded"
 description = "IoT/embedded type extensions for Craton Shield"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true

@@ -3,6 +3,7 @@ name = "vs-modbus-monitor-emb"
 description = "Modbus RTU/TCP intrusion detection for Craton Shield Embedded"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true
