@@ -3,6 +3,7 @@ name = "vs-types-auto"
 description = "Automotive-specific types for Craton Shield (VehicleId helpers, BusType, source constants)"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true

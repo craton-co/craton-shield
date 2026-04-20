@@ -58,7 +58,8 @@ members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.7.0"
+version = "0.7.1"
+authors = ["Craton Shield Contributors"]
 license = "Apache-2.0"
 rust-version = "1.82"
 repository = "https://github.com/craton-co/craton-shield"
@@ -69,58 +70,58 @@ readme = "README.md"
 
 [workspace.dependencies]
 # Core crates
-vs-types = { path = "core/types", version = "0.7.0" }
-vs-health = { path = "core/health", version = "0.7.0" }
-vs-crypto = { path = "core/crypto", version = "0.7.0" }
-vs-key-manager = { path = "core/key-manager", version = "0.7.0" }
-vs-secure-boot = { path = "core/secure-boot", version = "0.7.0" }
-vs-can-monitor = { path = "core/can-monitor", version = "0.7.0" }
-vs-eth-monitor = { path = "core/eth-monitor", version = "0.7.0" }
-vs-ids-engine = { path = "core/ids-engine", version = "0.7.0" }
-vs-anomaly = { path = "core/anomaly", version = "0.7.0" }
-vs-integrity = { path = "core/integrity", version = "0.7.0" }
-vs-netfw = { path = "core/netfw", version = "0.7.0" }
-vs-ota-validator = { path = "core/ota-validator", version = "0.7.0" }
-vs-event-logger = { path = "core/event-logger", version = "0.7.0" }
-vs-policy-engine = { path = "core/policy-engine", version = "0.7.0" }
-vs-runtime = { path = "core/runtime", version = "0.7.0" }
-vs-ffi = { path = "core/ffi", version = "0.7.0" }
-vs-storage = { path = "core/storage", version = "0.7.0" }
-vs-hal = { path = "core/hal", version = "0.7.0" }
-vs-hal-linux = { path = "core/hal-linux", version = "0.7.0" }
-vs-evidence-envelope = { path = "core/evidence-envelope", version = "0.7.0" }
-vs-report-iec62443 = { path = "core/report-iec62443", version = "0.7.0" }
-vs-report-iso21434 = { path = "core/report-iso21434", version = "0.7.0" }
-vs-report-iec62304 = { path = "core/report-iec62304", version = "0.7.0" }
+vs-types = { path = "core/types", version = "0.7.1" }
+vs-health = { path = "core/health", version = "0.7.1" }
+vs-crypto = { path = "core/crypto", version = "0.7.1" }
+vs-key-manager = { path = "core/key-manager", version = "0.7.1" }
+vs-secure-boot = { path = "core/secure-boot", version = "0.7.1" }
+vs-can-monitor = { path = "core/can-monitor", version = "0.7.1" }
+vs-eth-monitor = { path = "core/eth-monitor", version = "0.7.1" }
+vs-ids-engine = { path = "core/ids-engine", version = "0.7.1" }
+vs-anomaly = { path = "core/anomaly", version = "0.7.1" }
+vs-integrity = { path = "core/integrity", version = "0.7.1" }
+vs-netfw = { path = "core/netfw", version = "0.7.1" }
+vs-ota-validator = { path = "core/ota-validator", version = "0.7.1" }
+vs-event-logger = { path = "core/event-logger", version = "0.7.1" }
+vs-policy-engine = { path = "core/policy-engine", version = "0.7.1" }
+vs-runtime = { path = "core/runtime", version = "0.7.1" }
+vs-ffi = { path = "core/ffi", version = "0.7.1" }
+vs-storage = { path = "core/storage", version = "0.7.1" }
+vs-hal = { path = "core/hal", version = "0.7.1" }
+vs-hal-linux = { path = "core/hal-linux", version = "0.7.1" }
+vs-evidence-envelope = { path = "core/evidence-envelope", version = "0.7.1" }
+vs-report-iec62443 = { path = "core/report-iec62443", version = "0.7.1" }
+vs-report-iso21434 = { path = "core/report-iso21434", version = "0.7.1" }
+vs-report-iec62304 = { path = "core/report-iec62304", version = "0.7.1" }
 # Auto crates
-vs-types-auto = { path = "auto/types-auto", version = "0.7.0" }
-vs-autosar = { path = "auto/autosar", version = "0.7.0" }
-vs-v2x = { path = "auto/v2x", version = "0.7.0" }
-vs-signal-ids = { path = "auto/signal-ids", version = "0.7.0" }
-vs-diag-gateway = { path = "auto/diag-gateway", version = "0.7.0" }
-vs-runtime-auto = { path = "auto/runtime-auto", version = "0.7.0" }
-vs-ffi-auto = { path = "auto/ffi-auto", version = "0.7.0" }
+vs-types-auto = { path = "auto/types-auto", version = "0.7.1" }
+vs-autosar = { path = "auto/autosar", version = "0.7.1" }
+vs-v2x = { path = "auto/v2x", version = "0.7.1" }
+vs-signal-ids = { path = "auto/signal-ids", version = "0.7.1" }
+vs-diag-gateway = { path = "auto/diag-gateway", version = "0.7.1" }
+vs-runtime-auto = { path = "auto/runtime-auto", version = "0.7.1" }
+vs-ffi-auto = { path = "auto/ffi-auto", version = "0.7.1" }
 # Embedded crates
-vs-types-embedded = { path = "embedded/types-embedded", version = "0.7.0" }
-vs-mqtt-monitor = { path = "embedded/mqtt-monitor", version = "0.7.0" }
-vs-coap-monitor = { path = "embedded/coap-monitor", version = "0.7.0" }
-vs-ble-monitor = { path = "embedded/ble-monitor", version = "0.7.0" }
-vs-zigbee-monitor = { path = "embedded/zigbee-monitor", version = "0.7.0" }
-vs-lora-monitor = { path = "embedded/lora-monitor", version = "0.7.0" }
-vs-modbus-monitor-emb = { path = "embedded/modbus-monitor-emb", version = "0.7.0" }
-vs-runtime-embedded = { path = "embedded/runtime-embedded", version = "0.7.0" }
+vs-types-embedded = { path = "embedded/types-embedded", version = "0.7.1" }
+vs-mqtt-monitor = { path = "embedded/mqtt-monitor", version = "0.7.1" }
+vs-coap-monitor = { path = "embedded/coap-monitor", version = "0.7.1" }
+vs-ble-monitor = { path = "embedded/ble-monitor", version = "0.7.1" }
+vs-zigbee-monitor = { path = "embedded/zigbee-monitor", version = "0.7.1" }
+vs-lora-monitor = { path = "embedded/lora-monitor", version = "0.7.1" }
+vs-modbus-monitor-emb = { path = "embedded/modbus-monitor-emb", version = "0.7.1" }
+vs-runtime-embedded = { path = "embedded/runtime-embedded", version = "0.7.1" }
 # Industrial crates
-vs-types-ind = { path = "industrial/types-ind", version = "0.7.0" }
-vs-modbus-monitor-ind = { path = "industrial/modbus-monitor-ind", version = "0.7.0" }
-vs-opcua-monitor = { path = "industrial/opcua-monitor", version = "0.7.0" }
-vs-profinet-monitor = { path = "industrial/profinet-monitor", version = "0.7.0" }
-vs-ethernetip-monitor = { path = "industrial/ethernetip-monitor", version = "0.7.0" }
-vs-dnp3-monitor = { path = "industrial/dnp3-monitor", version = "0.7.0" }
-vs-bacnet-monitor = { path = "industrial/bacnet-monitor", version = "0.7.0" }
-vs-runtime-ind = { path = "industrial/runtime-ind", version = "0.7.0" }
-vs-s7comm-monitor = { path = "industrial/s7comm-monitor", version = "0.7.0" }
-vs-iec60870-monitor = { path = "industrial/iec60870-monitor", version = "0.7.0" }
-vs-iec61850-monitor = { path = "industrial/iec61850-monitor", version = "0.7.0" }
+vs-types-ind = { path = "industrial/types-ind", version = "0.7.1" }
+vs-modbus-monitor-ind = { path = "industrial/modbus-monitor-ind", version = "0.7.1" }
+vs-opcua-monitor = { path = "industrial/opcua-monitor", version = "0.7.1" }
+vs-profinet-monitor = { path = "industrial/profinet-monitor", version = "0.7.1" }
+vs-ethernetip-monitor = { path = "industrial/ethernetip-monitor", version = "0.7.1" }
+vs-dnp3-monitor = { path = "industrial/dnp3-monitor", version = "0.7.1" }
+vs-bacnet-monitor = { path = "industrial/bacnet-monitor", version = "0.7.1" }
+vs-runtime-ind = { path = "industrial/runtime-ind", version = "0.7.1" }
+vs-s7comm-monitor = { path = "industrial/s7comm-monitor", version = "0.7.1" }
+vs-iec60870-monitor = { path = "industrial/iec60870-monitor", version = "0.7.1" }
+vs-iec61850-monitor = { path = "industrial/iec61850-monitor", version = "0.7.1" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

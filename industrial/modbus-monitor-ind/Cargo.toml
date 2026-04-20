@@ -3,6 +3,7 @@ name = "vs-modbus-monitor-ind"
 description = "Modbus RTU/TCP intrusion detection for Craton Shield Industrial"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true

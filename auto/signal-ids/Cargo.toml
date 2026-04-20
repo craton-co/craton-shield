@@ -3,6 +3,7 @@ name = "vs-signal-ids"
 description = "CAN signal-level intrusion detection using per-signal EWMA anomaly ensemble"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"

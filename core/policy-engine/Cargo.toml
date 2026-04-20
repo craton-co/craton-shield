@@ -3,6 +3,7 @@ name = "vs-policy-engine"
 description = "Security policy evaluation engine for alert routing and response"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

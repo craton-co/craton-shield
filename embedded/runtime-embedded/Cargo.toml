@@ -3,6 +3,7 @@ name = "vs-runtime-embedded"
 description = "Lightweight IoT/embedded runtime orchestrating MQTT, CoAP, BLE, Zigbee, LoRa, and Modbus security monitors for Craton Shield"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true

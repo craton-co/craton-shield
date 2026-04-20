@@ -3,6 +3,7 @@ name = "vs-ota-validator"
 description = "TUF/Uptane OTA update validation with rollback protection"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

@@ -3,6 +3,7 @@ name = "vs-zigbee-monitor"
 description = "Zigbee / IEEE 802.15.4 intrusion detection for Craton Shield"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true

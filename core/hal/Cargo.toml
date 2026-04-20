@@ -3,6 +3,7 @@ name = "vs-hal"
 description = "Hardware abstraction layer traits for CAN, Ethernet, Timer, and HSM"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

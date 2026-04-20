@@ -3,6 +3,7 @@ name = "vs-runtime-auto"
 description = "Automotive runtime extending CratonShield with signal IDS, V2X, and UDS diagnostics"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true

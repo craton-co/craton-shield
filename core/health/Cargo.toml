@@ -3,6 +3,7 @@ name = "vs-health"
 description = "Shared subsystem health tracking for Craton Shield runtimes"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

@@ -3,6 +3,7 @@ name = "vs-autosar"
 description = "Craton Shield AUTOSAR Classic/Adaptive platform integration"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"

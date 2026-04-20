@@ -3,6 +3,7 @@ name = "vs-storage"
 description = "Persistent storage abstraction for configuration and key material"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

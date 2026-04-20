@@ -4,6 +4,7 @@ description = "BACnet intrusion detection for Craton Shield (IEC 62443)"
 readme = "README.md"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true

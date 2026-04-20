@@ -3,6 +3,7 @@ name = "vs-profinet-monitor"
 description = "PROFINET IO intrusion detection for Craton Shield (IEC 62443)"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"

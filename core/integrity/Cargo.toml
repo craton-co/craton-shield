@@ -3,6 +3,7 @@ name = "vs-integrity"
 description = "Memory region integrity monitoring with constant-time SHA-256 verification"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true

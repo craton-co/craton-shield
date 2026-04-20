@@ -3,6 +3,7 @@ name = "vs-diag-gateway"
 description = "UDS diagnostics gateway with SecurityAccess brute-force protection"
 edition.workspace = true
 version.workspace = true
+authors.workspace = true
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true
