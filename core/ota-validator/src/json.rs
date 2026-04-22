@@ -406,17 +406,39 @@ fn parse_tuf_root_inner(
         None => NO_KEYS,
     };
 
+    // Per-role thresholds default to 0 ("unset") when the signed metadata
+    // omits them. A 0 threshold is fail-closed: `keys_for_role` falls back
+    // to the root keys/threshold only when the role key set is *empty*, and
+    // `verify_role_metadata` rejects any role that has keys but a 0
+    // threshold with `InvalidConfig`. Defaulting to 1 instead would
+    // fabricate a threshold that was never present in the signed
+    // metadata — an attacker-influenced default — so a parsed-but-keyless
+    // role must yield 0, not 1.
+    let targets_threshold = parsed.signed.targets_threshold.unwrap_or(0);
+    let snapshot_threshold = parsed.signed.snapshot_threshold.unwrap_or(0);
+    let timestamp_threshold = parsed.signed.timestamp_threshold.unwrap_or(0);
+
+    // Reject a root where a role declares keys but no (or zero) threshold:
+    // such metadata is ambiguous and must not be silently accepted.
+    let role_has_keys = |ks: &[Option<TufKey>; 4]| ks.iter().any(Option::is_some);
+    if (role_has_keys(&targets_keys) && targets_threshold == 0)
+        || (role_has_keys(&snapshot_keys) && snapshot_threshold == 0)
+        || (role_has_keys(&timestamp_keys) && timestamp_threshold == 0)
+    {
+        return Err(VsError::InvalidConfig);
+    }
+
     let root = crate::TufRoot {
         version: parsed.signed.version,
         expires_us: parsed.signed.expires_us,
         root_keys,
         threshold: parsed.signed.threshold,
         targets_keys,
-        targets_threshold: parsed.signed.targets_threshold.unwrap_or(1),
+        targets_threshold,
         snapshot_keys,
-        snapshot_threshold: parsed.signed.snapshot_threshold.unwrap_or(1),
+        snapshot_threshold,
         timestamp_keys,
-        timestamp_threshold: parsed.signed.timestamp_threshold.unwrap_or(1),
+        timestamp_threshold,
     };
 
     let metadata = SignedMetadata {
