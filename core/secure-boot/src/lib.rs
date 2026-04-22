@@ -87,6 +87,22 @@ impl BootStage {
     }
 }
 
+/// Wire format version for [`BootEntry`] signature payload.
+///
+/// Bumped from implicit `v1` (image_hash only) to **v2** when the
+/// [`BootStage`] discriminant was incorporated into the signed payload.
+/// This is a **BREAKING CHANGE** to the on-wire signed format: signatures
+/// produced under v1 will not verify under v2 and vice versa. Production
+/// deployments must re-sign all boot images when upgrading.
+pub const BOOT_ENTRY_SIGNATURE_VERSION: u8 = 2;
+
+/// Domain separation tag for [`BootEntry`] signing digests.
+///
+/// Mixed into the pre-image to ensure signatures over a boot entry
+/// cannot be confused with signatures generated under any other
+/// protocol that signs structurally similar inputs.
+const BOOT_ENTRY_SIGN_DOMAIN: &[u8; 24] = b"vs-secure-boot-entry-v2\x00";
+
 /// A single entry in the boot chain to verify.
 #[derive(Debug, Clone, Copy)]
 pub struct BootEntry {
@@ -95,6 +111,81 @@ pub struct BootEntry {
     pub signature: [u8; 64],
     pub signer_key_id: KeyId,
     pub version: u32,
+}
+
+impl BootEntry {
+    /// Compute the 32-byte digest fed to ECDSA sign/verify for this entry.
+    ///
+    /// # Wire encoding (v2 — BREAKING change vs v1)
+    ///
+    /// The pre-image is the byte concatenation, in this exact order:
+    ///
+    /// 1. `BOOT_ENTRY_SIGN_DOMAIN`        — 24 bytes, domain separation tag
+    /// 2. `stage.ordinal()` as little-endian `u32` — 4 bytes
+    /// 3. `image_hash`                    — 32 bytes
+    ///
+    /// The pre-image (60 bytes total) is hashed with SHA-256 to produce
+    /// the 32-byte digest passed to `sign_p256` / `verify_p256`.
+    ///
+    /// Including the stage in the signed payload is a security fix: it
+    /// prevents a cross-stage substitution attack where a signature
+    /// produced for stage *N* could be replayed under stage *M* by a
+    /// signer with valid key material for stage *N*.
+    ///
+    /// **Wire compatibility:** v1 (image_hash only) signatures will NOT
+    /// verify against v2 digests. Re-sign all boot images on upgrade.
+    pub fn compute_signing_digest(
+        stage: BootStage,
+        image_hash: &[u8; 32],
+        crypto: &impl CryptoProvider,
+    ) -> Result<[u8; 32], VsError> {
+        // Pre-image layout: [domain(24) || stage_ordinal_le_u32(4) || image_hash(32)] = 60 bytes
+        let mut pre_image = [0u8; 24 + 4 + 32];
+        pre_image[..24].copy_from_slice(BOOT_ENTRY_SIGN_DOMAIN);
+        // Stage discriminant: BootStage::ordinal() returns u16 (covers all
+        // current variants including Application(255) -> 258); we widen to
+        // u32-LE for headroom and a fixed-width deterministic encoding.
+        let ordinal_bytes = (stage.ordinal() as u32).to_le_bytes();
+        pre_image[24..28].copy_from_slice(&ordinal_bytes);
+        pre_image[28..60].copy_from_slice(image_hash);
+        let mut digest = [0u8; 32];
+        crypto.sha256(&pre_image, &mut digest)?;
+        zeroize_buf(&mut pre_image);
+        Ok(digest)
+    }
+
+    /// Sign a [`BootEntry`]'s payload using the v2 wire format.
+    ///
+    /// Computes the stage-bound digest via [`Self::compute_signing_digest`]
+    /// and signs it with `key_id` via the provided [`CryptoProvider`].
+    /// See [`Self::compute_signing_digest`] for the exact wire encoding.
+    pub fn sign(
+        stage: BootStage,
+        image_hash: &[u8; 32],
+        key_id: KeyId,
+        crypto: &impl CryptoProvider,
+    ) -> Result<[u8; 64], VsError> {
+        let digest = Self::compute_signing_digest(stage, image_hash, crypto)?;
+        let mut sig = [0u8; 64];
+        crypto.sign_p256(key_id, &digest, &mut sig)?;
+        Ok(sig)
+    }
+
+    /// Verify this [`BootEntry`]'s signature using the v2 wire format.
+    ///
+    /// Recomputes the stage-bound digest and verifies the entry's
+    /// signature against `pub_key`. Returns `Ok(true)` for a valid
+    /// signature, `Ok(false)` for a cryptographically invalid one, and
+    /// `Err` only for operational failures.
+    #[must_use = "Ok(false) means the signature is INVALID; ignoring this return value accepts forged signatures"]
+    pub fn verify(
+        &self,
+        pub_key: &[u8; 65],
+        crypto: &impl CryptoProvider,
+    ) -> Result<bool, VsError> {
+        let digest = Self::compute_signing_digest(self.stage, &self.image_hash, crypto)?;
+        crypto.verify_p256(pub_key, &digest, &self.signature)
+    }
 }
 
 /// Result of a successful boot chain verification.
@@ -638,9 +729,15 @@ impl<C: CryptoProvider> BootVerifier<C> {
                 return Err(VsError::AuthenticationFailure);
             }
 
+            // Verify signature against the stage-bound digest (wire format v2).
+            // The signed pre-image includes the BootStage discriminant, so a
+            // signature produced for stage N cannot be presented as stage M.
+            // See `BootEntry::compute_signing_digest` for the exact encoding.
+            let signing_digest =
+                BootEntry::compute_signing_digest(entry.stage, &entry.image_hash, &self.crypto)?;
             let valid = self.crypto.verify_p256(
                 &self.pub_keys[key_idx],
-                &entry.image_hash,
+                &signing_digest,
                 &entry.signature,
             )?;
 
@@ -760,10 +857,24 @@ mod tests {
         pk
     }
 
-    fn sign_image(crypto: &SoftwareCryptoProvider, image_hash: &[u8; 32]) -> [u8; 64] {
-        let mut sig = [0u8; 64];
-        crypto.sign_p256(KeyId(0), image_hash, &mut sig).unwrap();
-        sig
+    /// Test helper: produce a stage-bound signature for a boot entry
+    /// using wire format v2 (stage discriminant included in the signed
+    /// payload). Mirrors what production callers do via `BootEntry::sign`.
+    fn sign_image(
+        crypto: &SoftwareCryptoProvider,
+        stage: BootStage,
+        image_hash: &[u8; 32],
+    ) -> [u8; 64] {
+        BootEntry::sign(stage, image_hash, KeyId(0), crypto).unwrap()
+    }
+
+    fn sign_image_with_key(
+        crypto: &SoftwareCryptoProvider,
+        stage: BootStage,
+        image_hash: &[u8; 32],
+        key_id: KeyId,
+    ) -> [u8; 64] {
+        BootEntry::sign(stage, image_hash, key_id, crypto).unwrap()
     }
 
     // ---- Boot chain verification ----
@@ -774,8 +885,8 @@ mod tests {
         let pk = test_pub_key();
         let h1 = [1u8; 32];
         let h2 = [2u8; 32];
-        let s1 = sign_image(&crypto, &h1);
-        let s2 = sign_image(&crypto, &h2);
+        let s1 = sign_image(&crypto, BootStage::Bootloader, &h1);
+        let s2 = sign_image(&crypto, BootStage::Os, &h2);
 
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
         verifier.register_pub_key(KeyId(0), &pk).unwrap();
@@ -827,7 +938,7 @@ mod tests {
     fn unregistered_key_slot_rejected() {
         let crypto = test_crypto();
         let h = [1u8; 32];
-        let s = sign_image(&crypto, &h);
+        let s = sign_image(&crypto, BootStage::Bootloader, &h);
 
         // Do NOT register any key.
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
@@ -851,8 +962,12 @@ mod tests {
         let pk = test_pub_key();
         let h1 = [1u8; 32];
         let h2 = [2u8; 32];
-        let s1 = sign_image(&crypto, &h1);
-        let s2 = sign_image(&crypto, &h2);
+        // Sign each hash for the stage it claims to belong to (Os, Bootloader).
+        // Stage ordering check fires before signature verification, so the
+        // exact stage used for signing is not load-bearing here, but we keep
+        // it consistent with each entry's declared stage.
+        let s1 = sign_image(&crypto, BootStage::Os, &h1);
+        let s2 = sign_image(&crypto, BootStage::Bootloader, &h2);
 
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
         verifier.register_pub_key(KeyId(0), &pk).unwrap();
@@ -894,7 +1009,7 @@ mod tests {
         let crypto = test_crypto();
         let pk = test_pub_key();
         let h = [1u8; 32];
-        let s = sign_image(&crypto, &h);
+        let s = sign_image(&crypto, BootStage::Bootloader, &h);
 
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
         verifier.register_pub_key(KeyId(0), &pk).unwrap();
@@ -926,7 +1041,7 @@ mod tests {
         let crypto = test_crypto();
         let pk = test_pub_key();
         let h = [1u8; 32];
-        let s = sign_image(&crypto, &h);
+        let s = sign_image(&crypto, BootStage::Bootloader, &h);
 
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
         verifier.register_pub_key(KeyId(0), &pk).unwrap();
@@ -964,8 +1079,8 @@ mod tests {
         let pk = test_pub_key();
         let h_a = [0x01; 32];
         let h_b = [0x02; 32];
-        let s_a = sign_image(&crypto, &h_a);
-        let s_b = sign_image(&crypto, &h_b);
+        let s_a = sign_image(&crypto, BootStage::Bootloader, &h_a);
+        let s_b = sign_image(&crypto, BootStage::Bootloader, &h_b);
 
         let mut verifier_a = BootVerifier::new(test_crypto(), BootFailurePolicy::Halt);
         verifier_a.register_pub_key(KeyId(0), &pk).unwrap();
@@ -1006,7 +1121,7 @@ mod tests {
         let crypto = test_crypto();
         let pk = test_pub_key();
         let h = [0xAB; 32];
-        let s = sign_image(&crypto, &h);
+        let s = sign_image(&crypto, BootStage::Bootloader, &h);
 
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
         verifier.register_pub_key(KeyId(0), &pk).unwrap();
@@ -1035,10 +1150,10 @@ mod tests {
         let h2 = [0x20; 32];
         let h3 = [0x30; 32];
         let h4 = [0x40; 32];
-        let s1 = sign_image(&crypto, &h1);
-        let s2 = sign_image(&crypto, &h2);
-        let s3 = sign_image(&crypto, &h3);
-        let s4 = sign_image(&crypto, &h4);
+        let s1 = sign_image(&crypto, BootStage::Bootloader, &h1);
+        let s2 = sign_image(&crypto, BootStage::Hypervisor, &h2);
+        let s3 = sign_image(&crypto, BootStage::Os, &h3);
+        let s4 = sign_image(&crypto, BootStage::Application(0), &h4);
 
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
         verifier.register_pub_key(KeyId(0), &pk).unwrap();
@@ -1156,10 +1271,9 @@ mod tests {
 
         let h1 = [0x10; 32];
         let h2 = [0x20; 32];
-        let mut s1 = [0u8; 64];
-        crypto.sign_p256(KeyId(0), &h1, &mut s1).unwrap();
-        let mut s2 = [0u8; 64];
-        crypto.sign_p256(KeyId(1), &h2, &mut s2).unwrap();
+        // Use stage-bound v2 signing for each entry's declared stage.
+        let s1 = sign_image_with_key(&crypto, BootStage::Bootloader, &h1, KeyId(0));
+        let s2 = sign_image_with_key(&crypto, BootStage::Os, &h2, KeyId(1));
 
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
         verifier.register_pub_key(KeyId(0), &pk_a).unwrap();
@@ -1482,7 +1596,7 @@ mod tests {
         let crypto = test_crypto();
         let pk = test_pub_key();
         let h = [1u8; 32];
-        let s = sign_image(&crypto, &h);
+        let s = sign_image(&crypto, BootStage::Bootloader, &h);
 
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
         verifier.register_pub_key(KeyId(0), &pk).unwrap();
@@ -1574,7 +1688,7 @@ mod tests {
         let crypto = test_crypto();
         let pk = test_pub_key();
         let h = [1u8; 32];
-        let s = sign_image(&crypto, &h);
+        let s = sign_image(&crypto, BootStage::Bootloader, &h);
 
         let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
         verifier.register_pub_key(KeyId(0), &pk).unwrap();
@@ -1615,8 +1729,12 @@ mod tests {
         let pk = test_pub_key();
         let h1 = [0x10; 32];
         let h2 = [0xAA; 32];
-        let s1 = sign_image(&crypto, &h1);
-        let s2 = sign_image(&crypto, &h2);
+        // h2 is used by both Application(0) and Application(1) entries below.
+        // Each verifier sees a chain with one of those app variants, so we
+        // must produce a stage-bound signature for each variant separately.
+        let s1 = sign_image(&crypto, BootStage::Bootloader, &h1);
+        let s2_app0 = sign_image(&crypto, BootStage::Application(0), &h2);
+        let s2_app1 = sign_image(&crypto, BootStage::Application(1), &h2);
 
         let mut v1 = BootVerifier::new(test_crypto(), BootFailurePolicy::Halt);
         let mut v2 = BootVerifier::new(test_crypto(), BootFailurePolicy::Halt);
@@ -1634,7 +1752,7 @@ mod tests {
             BootEntry {
                 stage: BootStage::Application(0),
                 image_hash: h2,
-                signature: s2,
+                signature: s2_app0,
                 signer_key_id: KeyId(0),
                 version: 1,
             },
@@ -1650,7 +1768,7 @@ mod tests {
             BootEntry {
                 stage: BootStage::Application(1),
                 image_hash: h2,
-                signature: s2,
+                signature: s2_app1,
                 signer_key_id: KeyId(0),
                 version: 1,
             },
@@ -1672,5 +1790,135 @@ mod tests {
         assert_eq!(format!("{}", BootStage::Os), "OS");
         assert_eq!(format!("{}", BootStage::Application(0)), "Application(0)");
         assert_eq!(format!("{}", BootStage::Application(5)), "Application(5)");
+    }
+
+    // ---- BootEntry signature: stage binding (wire format v2) ----
+
+    /// Same-stage roundtrip: signing as Bootloader and verifying as
+    /// Bootloader must succeed via both `BootEntry::verify` and the
+    /// full `BootVerifier::verify_boot_chain` path.
+    #[test]
+    fn boot_entry_sign_verify_same_stage_roundtrip() {
+        let crypto = test_crypto();
+        let pk = test_pub_key();
+        let h = [0x77; 32];
+
+        let sig = BootEntry::sign(BootStage::Bootloader, &h, KeyId(0), &crypto).unwrap();
+        let entry = BootEntry {
+            stage: BootStage::Bootloader,
+            image_hash: h,
+            signature: sig,
+            signer_key_id: KeyId(0),
+            version: 1,
+        };
+
+        // Direct verify on the entry.
+        assert!(entry.verify(&pk, &crypto).unwrap());
+
+        // Full chain verification path.
+        let mut verifier = BootVerifier::new(test_crypto(), BootFailurePolicy::Halt);
+        verifier.register_pub_key(KeyId(0), &pk).unwrap();
+        verifier.verify_boot_chain(&[entry], 1).unwrap();
+    }
+
+    /// Cross-stage substitution attack must FAIL.
+    ///
+    /// Sign a payload as `BootStage::Bootloader`, then attempt to present
+    /// the resulting entry under `BootStage::Application(0)`. Verification
+    /// must reject because the stage is now bound into the signed digest
+    /// (wire format v2). Pre-fix, this attack would have succeeded.
+    #[test]
+    fn boot_entry_cross_stage_substitution_rejected() {
+        let crypto = test_crypto();
+        let pk = test_pub_key();
+        let h = [0x77; 32];
+
+        // Sign for Bootloader.
+        let sig = BootEntry::sign(BootStage::Bootloader, &h, KeyId(0), &crypto).unwrap();
+
+        // Attacker presents the entry as Application(0) with the same hash + sig.
+        let forged = BootEntry {
+            stage: BootStage::Application(0),
+            image_hash: h,
+            signature: sig,
+            signer_key_id: KeyId(0),
+            version: 1,
+        };
+
+        // Direct verify should reject (Ok(false), not Err).
+        assert!(!forged.verify(&pk, &crypto).unwrap());
+
+        // BootVerifier path should reject with AuthenticationFailure.
+        let mut verifier = BootVerifier::new(test_crypto(), BootFailurePolicy::Halt);
+        verifier.register_pub_key(KeyId(0), &pk).unwrap();
+        assert_eq!(
+            verifier.verify_boot_chain(&[forged], 1),
+            Err(VsError::AuthenticationFailure),
+        );
+    }
+
+    /// Reverse direction: signature produced for Application(0) must not
+    /// verify when presented as Bootloader.
+    #[test]
+    fn boot_entry_cross_stage_substitution_rejected_reverse() {
+        let crypto = test_crypto();
+        let pk = test_pub_key();
+        let h = [0xC3; 32];
+
+        let sig = BootEntry::sign(BootStage::Application(0), &h, KeyId(0), &crypto).unwrap();
+        let forged = BootEntry {
+            stage: BootStage::Bootloader,
+            image_hash: h,
+            signature: sig,
+            signer_key_id: KeyId(0),
+            version: 1,
+        };
+        assert!(!forged.verify(&pk, &crypto).unwrap());
+    }
+
+    /// Different application indices must not be interchangeable either.
+    /// Signing for Application(0) and presenting as Application(1) must fail.
+    #[test]
+    fn boot_entry_cross_app_index_substitution_rejected() {
+        let crypto = test_crypto();
+        let pk = test_pub_key();
+        let h = [0xA1; 32];
+
+        let sig = BootEntry::sign(BootStage::Application(0), &h, KeyId(0), &crypto).unwrap();
+        let forged = BootEntry {
+            stage: BootStage::Application(1),
+            image_hash: h,
+            signature: sig,
+            signer_key_id: KeyId(0),
+            version: 1,
+        };
+        assert!(!forged.verify(&pk, &crypto).unwrap());
+    }
+
+    /// The signing digest must depend on the stage: digests for the same
+    /// `image_hash` under different stages must differ.
+    #[test]
+    fn signing_digest_differs_per_stage() {
+        let crypto = test_crypto();
+        let h = [0x55; 32];
+        let d_boot = BootEntry::compute_signing_digest(BootStage::Bootloader, &h, &crypto).unwrap();
+        let d_hyp = BootEntry::compute_signing_digest(BootStage::Hypervisor, &h, &crypto).unwrap();
+        let d_os = BootEntry::compute_signing_digest(BootStage::Os, &h, &crypto).unwrap();
+        let d_app0 =
+            BootEntry::compute_signing_digest(BootStage::Application(0), &h, &crypto).unwrap();
+        let d_app1 =
+            BootEntry::compute_signing_digest(BootStage::Application(1), &h, &crypto).unwrap();
+
+        assert_ne!(d_boot, d_hyp);
+        assert_ne!(d_boot, d_os);
+        assert_ne!(d_boot, d_app0);
+        assert_ne!(d_app0, d_app1);
+        assert_ne!(d_hyp, d_os);
+    }
+
+    /// Sanity: the wire-format version constant exists and equals 2.
+    #[test]
+    fn boot_entry_signature_version_is_v2() {
+        assert_eq!(BOOT_ENTRY_SIGNATURE_VERSION, 2);
     }
 }
