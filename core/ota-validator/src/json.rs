@@ -272,10 +272,43 @@ fn convert_target_entry_option(
 
 const NO_KEYS: [Option<TufKey>; 4] = [None, None, None, None];
 
+/// Advance past the character(s) consumed by a JSON backslash escape.
+///
+/// `i` must point at the byte *immediately after* the backslash. Returns
+/// the index of the next byte to process. For a `\uXXXX` escape with four
+/// valid hex digits this skips `u` plus the four digits; for every other
+/// escape (including a malformed `\u` without four hex digits) it skips a
+/// single byte. Centralising this logic guarantees the two escape-aware
+/// scans below stay byte-for-byte identical — a divergence here is exactly
+/// the kind of parser-differential bug that can shift the signed digest.
+fn skip_json_escape(json: &[u8], i: usize) -> usize {
+    if i < json.len()
+        && json[i] == b'u'
+        && i + 5 <= json.len()
+        && json[i + 1..i + 5]
+            .iter()
+            .all(|&h| matches!(h, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'))
+    {
+        i + 5 // skip 'u' + 4 hex digits
+    } else {
+        i + 1 // skip the single escaped character
+    }
+}
+
 /// Find the byte range of the `"signed":{...}` value in a TUF JSON envelope.
 ///
 /// Returns the slice covering the inner JSON object (from `{` to `}`).
 /// The search correctly skips `"signed":` occurrences inside JSON string values.
+///
+/// # Canonicalization warning
+///
+/// This function returns the *raw bytes* of the `"signed"` object exactly
+/// as they appear in the transport envelope; it is **not** a canonical-JSON
+/// serializer. The SHA-256 of this slice becomes `content_hash`, so
+/// signature verification only succeeds if the producer already emitted
+/// canonical JSON (sorted keys, no insignificant whitespace) identical to
+/// what the signing tooling hashed. Any whitespace or key-ordering
+/// difference silently changes the digest and causes verification to fail.
 fn find_signed_value(json: &[u8]) -> Result<&[u8], VsError> {
     let needle = b"\"signed\":";
 
@@ -289,21 +322,7 @@ fn find_signed_value(json: &[u8]) -> Result<&[u8], VsError> {
     while i < json.len() {
         let b = json[i];
         if esc {
-            // For \uXXXX escapes, skip the 4 hex digits only if they
-            // are valid hex characters. Otherwise treat the sequence as
-            // regular characters so we don't skip past a closing quote.
-            if b == b'u' && i + 5 <= json.len() {
-                let hex_valid = json[i + 1..i + 5]
-                    .iter()
-                    .all(|&h| matches!(h, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'));
-                if hex_valid {
-                    i += 5; // skip 'u' + 4 hex digits
-                } else {
-                    i += 1;
-                }
-            } else {
-                i += 1;
-            }
+            i = skip_json_escape(json, i);
             esc = false;
             continue;
         }
@@ -347,17 +366,9 @@ fn find_signed_value(json: &[u8]) -> Result<&[u8], VsError> {
     while i < json.len() {
         let b = json[i];
         if escape {
-            // For \uXXXX escapes, skip the 4 hex digits only if they
-            // are valid hex characters.
-            if b == b'u' && i + 5 <= json.len() {
-                let hex_valid = json[i + 1..i + 5]
-                    .iter()
-                    .all(|&h| matches!(h, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'));
-                if hex_valid {
-                    i += 4; // skip 4 hex digits (loop will add 1 more)
-                }
-            }
+            i = skip_json_escape(json, i);
             escape = false;
+            continue;
         } else if b == b'\\' && in_string {
             escape = true;
         } else if b == b'"' {
