@@ -182,7 +182,7 @@ struct JsonTargetsSigned<'a> {
 // Conversion helpers
 // ---------------------------------------------------------------------------
 
-fn convert_key(jk: &JsonKey<'_>) -> Result<TufKey, VsError> {
+fn convert_key(jk: &JsonKey<'_>, crypto: &impl CryptoProvider) -> Result<TufKey, VsError> {
     // TUF spec mandates the on-wire key type string `"ecdsa-sha2-nistp256"`
     // for NIST P-256 ECDSA. Earlier revisions of this parser accepted the
     // lax aliases `"ecdsa"` and `"EcdsaP256"`; both are rejected as of
@@ -197,6 +197,17 @@ fn convert_key(jk: &JsonKey<'_>) -> Result<TufKey, VsError> {
 
     let mut public_key = [0u8; 65];
     hex_decode(jk.keyval.public, &mut public_key)?;
+
+    // The `key_id` MUST be the SHA-256 fingerprint of the public key
+    // material. Verifying this at parse time prevents a malformed or
+    // malicious root from decoupling the advertised fingerprint from the
+    // key that actually verifies signatures (which would otherwise let a
+    // metadata author claim an arbitrary `key_id` for any public key).
+    let mut fingerprint = [0u8; 32];
+    crypto.sha256(&public_key, &mut fingerprint)?;
+    if !vs_types::constant_time_eq_32(&fingerprint, &key_id) {
+        return Err(VsError::InvalidInput);
+    }
 
     Ok(TufKey {
         key_id,
@@ -215,9 +226,12 @@ fn convert_sig(js: &JsonSignature<'_>) -> Result<TufSignature, VsError> {
     Ok(TufSignature { key_id, sig })
 }
 
-fn convert_key_option(opt: &Option<JsonKey<'_>>) -> Result<Option<TufKey>, VsError> {
+fn convert_key_option(
+    opt: &Option<JsonKey<'_>>,
+    crypto: &impl CryptoProvider,
+) -> Result<Option<TufKey>, VsError> {
     match opt {
-        Some(jk) => Ok(Some(convert_key(jk)?)),
+        Some(jk) => Ok(Some(convert_key(jk, crypto)?)),
         None => Ok(None),
     }
 }
@@ -229,12 +243,15 @@ fn convert_sig_option(opt: &Option<JsonSignature<'_>>) -> Result<Option<TufSigna
     }
 }
 
-fn convert_key_array(ka: &JsonKeyArray<'_>) -> Result<[Option<TufKey>; 4], VsError> {
+fn convert_key_array(
+    ka: &JsonKeyArray<'_>,
+    crypto: &impl CryptoProvider,
+) -> Result<[Option<TufKey>; 4], VsError> {
     Ok([
-        convert_key_option(&ka.0)?,
-        convert_key_option(&ka.1)?,
-        convert_key_option(&ka.2)?,
-        convert_key_option(&ka.3)?,
+        convert_key_option(&ka.0, crypto)?,
+        convert_key_option(&ka.1, crypto)?,
+        convert_key_option(&ka.2, crypto)?,
+        convert_key_option(&ka.3, crypto)?,
     ])
 }
 
@@ -390,11 +407,12 @@ fn find_signed_value(json: &[u8]) -> Result<&[u8], VsError> {
 
 fn parse_tuf_root_inner(
     json: &[u8],
+    crypto: &impl CryptoProvider,
 ) -> Result<(crate::TufRoot, SignedMetadata, [Option<TufSignature>; 4]), VsError> {
     let (parsed, _): (JsonSignedRoot<'_>, _) =
         serde_json_core::from_slice(json).map_err(|_| VsError::InvalidInput)?;
 
-    let root_keys = convert_key_array(&parsed.signed.keys)?;
+    let root_keys = convert_key_array(&parsed.signed.keys, crypto)?;
 
     let signatures = [
         convert_sig_option(&parsed.signatures.0)?,
@@ -405,15 +423,15 @@ fn parse_tuf_root_inner(
 
     // Parse per-role delegation keys if present.
     let targets_keys = match &parsed.signed.targets_keys {
-        Some(ka) => convert_key_array(ka)?,
+        Some(ka) => convert_key_array(ka, crypto)?,
         None => NO_KEYS,
     };
     let snapshot_keys = match &parsed.signed.snapshot_keys {
-        Some(ka) => convert_key_array(ka)?,
+        Some(ka) => convert_key_array(ka, crypto)?,
         None => NO_KEYS,
     };
     let timestamp_keys = match &parsed.signed.timestamp_keys {
-        Some(ka) => convert_key_array(ka)?,
+        Some(ka) => convert_key_array(ka, crypto)?,
         None => NO_KEYS,
     };
 
@@ -477,7 +495,7 @@ pub fn parse_tuf_root_with_hash(
     json: &[u8],
     crypto: &impl CryptoProvider,
 ) -> Result<(crate::TufRoot, SignedMetadata), VsError> {
-    let (root, mut metadata, _) = parse_tuf_root_inner(json)?;
+    let (root, mut metadata, _) = parse_tuf_root_inner(json, crypto)?;
     let signed_bytes = find_signed_value(json)?;
     crypto.sha256(signed_bytes, &mut metadata.content_hash)?;
     Ok((root, metadata))
@@ -656,6 +674,23 @@ mod tests {
         }
     }
 
+    /// Compute the hex-encoded `keyid` that [`convert_key`] requires for a
+    /// public key encoded as `pubkey_hex`, i.e. the SHA-256 fingerprint of
+    /// the 65-byte key material as produced by `HashCrypto`.
+    fn fingerprint_hex(pubkey_hex: &str) -> alloc::string::String {
+        use alloc::string::String;
+        use core::fmt::Write;
+        let mut public_key = [0u8; 65];
+        hex_decode(pubkey_hex, &mut public_key).expect("valid 65-byte pubkey hex");
+        let mut fp = [0u8; 32];
+        HashCrypto.sha256(&public_key, &mut fp).unwrap();
+        let mut s = String::new();
+        for b in fp {
+            write!(s, "{b:02x}").unwrap();
+        }
+        s
+    }
+
     #[test]
     fn hex_decode_valid() {
         let mut out = [0u8; 4];
@@ -685,8 +720,9 @@ mod tests {
 
     #[test]
     fn parse_tuf_root_with_hash_minimal() {
-        let key_id_hex = "aa".repeat(32);
         let pubkey_hex = "bb".repeat(65);
+        // `convert_key` requires keyid == SHA-256 fingerprint of the pubkey.
+        let key_id_hex = fingerprint_hex(&pubkey_hex);
         let sig_hex = "cc".repeat(64);
 
         let json = format!(
@@ -702,14 +738,12 @@ mod tests {
         assert!(root.root_keys[1].is_none());
 
         let key = root.root_keys[0].as_ref().unwrap();
-        assert_eq!(key.key_id, [0xAA; 32]);
         assert_eq!(key.key_type, KeyType::EcdsaP256);
         assert_eq!(key.public_key, [0xBB; 65]);
 
         assert_eq!(metadata.version, 1);
         assert!(metadata.signatures[0].is_some());
         let sig = metadata.signatures[0].as_ref().unwrap();
-        assert_eq!(sig.key_id, [0xAA; 32]);
         assert_eq!(sig.sig, [0xCC; 64]);
 
         // Per-role keys should be empty when not specified.
@@ -719,10 +753,10 @@ mod tests {
 
     #[test]
     fn parse_tuf_root_with_hash_multiple_keys_and_sigs() {
-        let k1_id = "01".repeat(32);
-        let k2_id = "02".repeat(32);
         let pubkey1 = "a1".repeat(65);
         let pubkey2 = "a2".repeat(65);
+        let k1_id = fingerprint_hex(&pubkey1);
+        let k2_id = fingerprint_hex(&pubkey2);
         let sig1 = "b1".repeat(64);
         let sig2 = "b2".repeat(64);
 
@@ -761,6 +795,24 @@ mod tests {
 
         let result = parse_tuf_root_with_hash(json.as_bytes(), &HashCrypto);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_tuf_root_rejects_keyid_not_matching_fingerprint() {
+        // The keyid is well-formed hex but is NOT the SHA-256 fingerprint
+        // of the public key. `convert_key` must reject it so a metadata
+        // author cannot decouple the advertised fingerprint from the key
+        // that actually verifies signatures.
+        let pubkey_hex = "bb".repeat(65);
+        let wrong_key_id = "aa".repeat(32); // not fingerprint_hex(&pubkey_hex)
+        let sig_hex = "cc".repeat(64);
+
+        let json = format!(
+            r#"{{"signatures":[{{"keyid":"{wrong_key_id}","sig":"{sig_hex}"}},null,null,null],"signed":{{"version":1,"expires_us":1000000,"threshold":1,"keys":[{{"keyid":"{wrong_key_id}","keytype":"ecdsa-sha2-nistp256","keyval":{{"public":"{pubkey_hex}"}}}},null,null,null]}}}}"#,
+        );
+
+        let result = parse_tuf_root_with_hash(json.as_bytes(), &HashCrypto);
+        assert_eq!(result.err(), Some(VsError::InvalidInput));
     }
 
     #[test]
@@ -837,8 +889,8 @@ mod tests {
 
     #[test]
     fn parse_tuf_root_with_hash_computes_content_hash() {
-        let key_id_hex = "aa".repeat(32);
         let pubkey_hex = "bb".repeat(65);
+        let key_id_hex = fingerprint_hex(&pubkey_hex);
         let sig_hex = "cc".repeat(64);
 
         let json = format!(
@@ -868,10 +920,10 @@ mod tests {
 
     #[test]
     fn parse_tuf_root_with_per_role_keys() {
-        let root_key_id = "01".repeat(32);
         let root_pubkey = "a1".repeat(65);
-        let targets_key_id = "02".repeat(32);
         let targets_pubkey = "a2".repeat(65);
+        let root_key_id = fingerprint_hex(&root_pubkey);
+        let targets_key_id = fingerprint_hex(&targets_pubkey);
         let sig_hex = "cc".repeat(64);
 
         let json = format!(
@@ -882,7 +934,7 @@ mod tests {
         assert!(root.targets_keys[0].is_some());
         assert_eq!(root.targets_threshold, 2);
         let tk = root.targets_keys[0].as_ref().unwrap();
-        assert_eq!(tk.key_id, [0x02; 32]);
+        assert_eq!(tk.public_key, [0xA2; 65]);
 
         // Other role keys should still be empty.
         assert!(root.snapshot_keys.iter().all(|k| k.is_none()));
