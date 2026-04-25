@@ -35,11 +35,15 @@ const AUDIT_LOG_CAPACITY: usize = 512;
 const _: () = assert!(AUDIT_LOG_CAPACITY.is_power_of_two());
 
 // UDS SID constants
+const SID_DIAGNOSTIC_SESSION_CONTROL: u8 = 0x10;
 const SID_SECURITY_ACCESS: u8 = 0x27;
 const SID_ROUTINE_CONTROL: u8 = 0x31;
 const SID_REQUEST_DOWNLOAD: u8 = 0x34;
 const SID_TRANSFER_DATA: u8 = 0x36;
 const SID_REQUEST_TRANSFER_EXIT: u8 = 0x37;
+
+/// UDS DiagnosticSessionControl (SID 0x10) sub-function for the default session.
+const DSC_DEFAULT_SESSION: u8 = 0x01;
 
 // SecurityAccess sub-functions (used in tests)
 #[cfg(test)]
@@ -62,12 +66,19 @@ const DECISION_MONITOR: u8 = 2;
 /// Allow-list policy for UDS Service Identifiers.
 ///
 /// Each SID can be marked as allowed without authentication, or as requiring
-/// authentication before it is forwarded.
+/// authentication before it is forwarded. Each SID may also carry a
+/// per-SID minimum security access level (per ISO 14229) — requests received
+/// while the session's current security level is below this threshold are
+/// rejected with NRC 0x33 (`securityAccessDenied`).
 pub struct UdsPolicy {
     /// SIDs allowed without prior authentication.
     pub allowed_sids: [bool; 256],
     /// SIDs that require an authenticated session.
     pub require_auth_sids: [bool; 256],
+    /// Minimum `SecurityAccess` level required for each SID (0 = no minimum).
+    /// A request whose session's current level is below this value is rejected
+    /// with NRC 0x33 (`securityAccessDenied`).
+    pub min_security_levels: [u8; 256],
 }
 
 impl Default for UdsPolicy {
@@ -82,6 +93,7 @@ impl UdsPolicy {
         Self {
             allowed_sids: [false; 256],
             require_auth_sids: [false; 256],
+            min_security_levels: [0; 256],
         }
     }
 
@@ -104,6 +116,20 @@ impl UdsPolicy {
         let idx = sid as usize;
         self.require_auth_sids[idx] = true;
         self.allowed_sids[idx] = false;
+    }
+
+    /// Set the minimum required `SecurityAccess` level for a SID.
+    ///
+    /// Requests carrying this SID are rejected with NRC 0x33
+    /// (`securityAccessDenied`) when the active session's `security_level`
+    /// is below `level`. A `level` of 0 disables the per-SID check.
+    pub fn set_min_security_level(&mut self, sid: u8, level: u8) {
+        self.min_security_levels[sid as usize] = level;
+    }
+
+    /// Returns the minimum required security level for `sid` (0 if none).
+    pub fn min_security_level(&self, sid: u8) -> u8 {
+        self.min_security_levels[sid as usize]
     }
 
     /// Validate that no SID is marked both allowed and auth-required.
@@ -181,6 +207,42 @@ pub enum BlockReason {
     PolicyDenied,
     /// All session slots are occupied by authenticated testers.
     SessionsFull,
+    /// The session is authenticated but has not reached the minimum
+    /// `SecurityAccess` level required for the requested SID.
+    /// Mapped to UDS NRC 0x33 (`securityAccessDenied`).
+    SecurityAccessDenied,
+}
+
+// UDS NRC (Negative Response Code) values per ISO 14229.
+/// NRC 0x33 — `securityAccessDenied`.
+pub const NRC_SECURITY_ACCESS_DENIED: u8 = 0x33;
+/// NRC 0x7F — `serviceNotSupportedInActiveSession`.
+pub const NRC_SERVICE_NOT_SUPPORTED_IN_ACTIVE_SESSION: u8 = 0x7F;
+/// NRC 0x37 — `requiredTimeDelayNotExpired` (used here for lockout).
+pub const NRC_REQUIRED_TIME_DELAY_NOT_EXPIRED: u8 = 0x37;
+/// NRC 0x11 — `serviceNotSupported`.
+pub const NRC_SERVICE_NOT_SUPPORTED: u8 = 0x11;
+/// NRC 0x24 — `requestSequenceError` (used for session-related errors).
+pub const NRC_REQUEST_SEQUENCE_ERROR: u8 = 0x24;
+/// NRC 0x72 — `generalProgrammingFailure` (used as a generic fallback).
+pub const NRC_GENERAL_PROGRAMMING_FAILURE: u8 = 0x72;
+
+impl BlockReason {
+    /// Map this block reason to its UDS Negative Response Code (NRC).
+    ///
+    /// See ISO 14229-1 § 7.5 (Negative Response Codes).
+    #[must_use]
+    pub fn nrc(self) -> u8 {
+        match self {
+            BlockReason::Unauthorized | BlockReason::SecurityAccessDenied => {
+                NRC_SECURITY_ACCESS_DENIED
+            }
+            BlockReason::LockedOut => NRC_REQUIRED_TIME_DELAY_NOT_EXPIRED,
+            BlockReason::SessionExpired => NRC_REQUEST_SEQUENCE_ERROR,
+            BlockReason::PolicyDenied => NRC_SERVICE_NOT_SUPPORTED,
+            BlockReason::SessionsFull => NRC_GENERAL_PROGRAMMING_FAILURE,
+        }
+    }
 }
 
 /// A security challenge returned to the tester.
@@ -670,8 +732,28 @@ impl<C: CryptoProvider> DiagGateway<C> {
             return DiagDecision::Block(BlockReason::LockedOut);
         }
 
+        // Per-SID minimum-security-level pre-check. Applies to every SID
+        // except SecurityAccess itself (which is the very mechanism by which
+        // the level is raised) and the DiagnosticSessionControl service
+        // (since transitioning to the default session intentionally drops
+        // the level back to 0 — we evaluate that case below).
+        if sid != SID_SECURITY_ACCESS && sid != SID_DIAGNOSTIC_SESSION_CONTROL {
+            let required = self.policy.min_security_levels[sid as usize];
+            if required > 0 {
+                let current = self
+                    .find_session(tester_addr)
+                    .map_or(0, |i| self.sessions[i].security_level);
+                if current < required {
+                    return DiagDecision::Block(BlockReason::SecurityAccessDenied);
+                }
+            }
+        }
+
         match sid {
             SID_SECURITY_ACCESS => self.handle_security_access(tester_addr, payload, ts_us),
+            SID_DIAGNOSTIC_SESSION_CONTROL => {
+                self.handle_session_control(tester_addr, payload, sid, ts_us)
+            }
             // SIDs 0x31 (RoutineControl), 0x34 (RequestDownload), 0x36
             // (TransferData), and 0x37 (RequestTransferExit) are
             // unconditionally treated as auth-required, regardless of the
@@ -686,6 +768,61 @@ impl<C: CryptoProvider> DiagGateway<C> {
             | SID_REQUEST_TRANSFER_EXIT => self.handle_auth_required_sid(tester_addr, ts_us),
             _ => self.handle_policy_sid(tester_addr, sid, ts_us),
         }
+    }
+
+    /// Handle a `DiagnosticSessionControl` (SID 0x10) request.
+    ///
+    /// Per ISO 14229, switching back to the default session (sub-function
+    /// 0x01) MUST clear all `SecurityAccess` state for the session. The
+    /// authenticated flag is reset, the security level drops to 0, and any
+    /// pending seed challenge is discarded so a stale handshake cannot be
+    /// completed against the new session.
+    ///
+    /// Policy enforcement is delegated to [`Self::handle_policy_sid`] —
+    /// the session-state reset only runs after the policy returns
+    /// [`DiagDecision::Forward`].
+    fn handle_session_control(
+        &mut self,
+        tester_addr: u16,
+        payload: &[u8],
+        sid: u8,
+        ts_us: u64,
+    ) -> DiagDecision {
+        let sub_fn = payload.first().copied().unwrap_or(0);
+
+        // Run the same policy check as any other SID — if the policy denies
+        // 0x10 the auth state must NOT be reset (an attacker could otherwise
+        // use a denied request to clear a victim's level).
+        let decision = self.handle_policy_sid(tester_addr, sid, ts_us);
+        if decision != DiagDecision::Forward {
+            return decision;
+        }
+
+        if let Some(idx) = self.find_session(tester_addr) {
+            self.sessions[idx].session_type = sub_fn;
+            if sub_fn == DSC_DEFAULT_SESSION {
+                self.sessions[idx].authenticated = false;
+                self.sessions[idx].security_level = 0;
+                // Volatile-zeroize any pending seed to prevent its use after
+                // the security context has been reset.
+                if let Some(ref mut s) = self.sessions[idx].pending_seed {
+                    #[allow(unsafe_code)]
+                    for b in s.iter_mut() {
+                        // SAFETY: `b` is a valid, aligned, dereferenceable
+                        // pointer derived from a live mutable reference.
+                        unsafe { core::ptr::write_volatile(b, 0) };
+                    }
+                }
+                core::hint::black_box(
+                    self.sessions[idx]
+                        .pending_seed
+                        .as_ref()
+                        .map(|s| s.as_ptr()),
+                );
+                self.sessions[idx].pending_seed = None;
+            }
+        }
+        DiagDecision::Forward
     }
 
     // ---- SecurityAccess (SID 0x27) ---------------------------------------
@@ -1889,12 +2026,178 @@ mod tests {
             BlockReason::SessionExpired,
             BlockReason::PolicyDenied,
             BlockReason::SessionsFull,
+            BlockReason::SecurityAccessDenied,
         ];
         for i in 0..reasons.len() {
             for j in i + 1..reasons.len() {
                 assert_ne!(reasons[i], reasons[j]);
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-SID minimum security level + default-session reset tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn block_reason_security_access_denied_maps_to_nrc_0x33() {
+        assert_eq!(BlockReason::SecurityAccessDenied.nrc(), 0x33);
+        // The Unauthorized variant — caused by missing SecurityAccess entirely
+        // — also maps to NRC 0x33 per ISO 14229.
+        assert_eq!(BlockReason::Unauthorized.nrc(), 0x33);
+        // Locked-out testers map to 0x37 (requiredTimeDelayNotExpired).
+        assert_eq!(BlockReason::LockedOut.nrc(), 0x37);
+    }
+
+    #[test]
+    fn per_sid_min_level_blocks_request_below_threshold() {
+        // SID 0x22 (ReadDataByIdentifier) configured to require security level 2.
+        // After SecurityAccess sub-function 0x01 the session is at level 1,
+        // so a 0x22 request must be rejected with SecurityAccessDenied (NRC 0x33).
+        let mut policy = UdsPolicy::new();
+        policy.allow_sid(0x22);
+        policy.set_min_security_level(0x22, 2);
+
+        let mut gw =
+            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let tester = 0x0F80;
+
+        // Authenticate at level 1 (sub-function 0x01).
+        assert!(authenticate(&mut gw, tester, 1_000));
+
+        let d = gw.receive_uds_request(tester, 0x22, &[], 2_000);
+        assert_eq!(d, DiagDecision::Block(BlockReason::SecurityAccessDenied));
+        // The block reason must map to UDS NRC 0x33.
+        if let DiagDecision::Block(r) = d {
+            assert_eq!(r.nrc(), 0x33);
+        } else {
+            panic!("expected Block, got {d:?}");
+        }
+    }
+
+    #[test]
+    fn per_sid_min_level_allows_request_at_or_above_threshold() {
+        // Same configuration as the previous test, but authenticate at the
+        // exact level required (level 2 via sub-function 0x03) and verify the
+        // request is forwarded.
+        let mut policy = UdsPolicy::new();
+        policy.allow_sid(0x22);
+        policy.set_min_security_level(0x22, 2);
+
+        let mut gw =
+            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let tester = 0x0F81;
+
+        // Seed request for level 2 (sub-function 0x03).
+        let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &[0x03], 1_000_000);
+        let seed = match d {
+            DiagDecision::Challenge(c) => c.seed,
+            other => panic!("expected Challenge, got {other:?}"),
+        };
+
+        // Compute the expected key and send sub-function 0x04.
+        let mut key = [0u8; 32];
+        gw.crypto
+            .hmac_sha256(gw.hmac_key_id, &seed, &mut key)
+            .expect("hmac");
+        let mut payload = [0u8; 33];
+        payload[0] = 0x04;
+        payload[1..33].copy_from_slice(&key);
+        let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &payload, 1_000_001);
+        assert_eq!(d, DiagDecision::Forward);
+
+        // 0x22 with min_security_level=2 should now be forwarded.
+        let d = gw.receive_uds_request(tester, 0x22, &[], 2_000_000);
+        assert_eq!(d, DiagDecision::Forward);
+    }
+
+    #[test]
+    fn per_sid_min_level_default_zero_does_not_block_unauthenticated_open_sid() {
+        // A SID with no minimum (default 0) and `allow_sid` should remain
+        // forwardable without authentication.
+        let mut policy = UdsPolicy::new();
+        policy.allow_sid(0x10);
+        let mut gw =
+            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let d = gw.receive_uds_request(0x0F90, 0x10, &[], 1_000);
+        assert_eq!(d, DiagDecision::Forward);
+    }
+
+    #[test]
+    fn default_session_transition_clears_security_state() {
+        // After authenticating, transitioning back to the default session
+        // (DSC sub-function 0x01) MUST drop the security level back to 0
+        // and clear the authenticated flag, even though the session itself
+        // remains alive.
+        let mut policy = UdsPolicy::new();
+        policy.allow_sid(SID_DIAGNOSTIC_SESSION_CONTROL);
+        let mut gw =
+            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let tester = 0x0FA0;
+
+        // Authenticate at level 1.
+        assert!(authenticate(&mut gw, tester, 1_000));
+
+        // Confirm authenticated.
+        let idx = gw.find_session(tester).expect("session exists");
+        assert!(gw.sessions[idx].authenticated);
+        assert_eq!(gw.sessions[idx].security_level, 1);
+
+        // Transition to default session — should reset auth state.
+        let d = gw.receive_uds_request(
+            tester,
+            SID_DIAGNOSTIC_SESSION_CONTROL,
+            &[DSC_DEFAULT_SESSION],
+            2_000,
+        );
+        assert_eq!(d, DiagDecision::Forward);
+
+        let idx = gw.find_session(tester).expect("session still alive");
+        assert!(
+            !gw.sessions[idx].authenticated,
+            "auth flag must be cleared on default-session transition"
+        );
+        assert_eq!(
+            gw.sessions[idx].security_level, 0,
+            "security level must reset to 0 on default-session transition"
+        );
+        assert!(
+            gw.sessions[idx].pending_seed.is_none(),
+            "pending seed must be discarded on default-session transition"
+        );
+
+        // Subsequent auth-required SID should now be Unauthorized.
+        let d = gw.receive_uds_request(tester, SID_ROUTINE_CONTROL, &[], 3_000);
+        assert_eq!(d, DiagDecision::Block(BlockReason::Unauthorized));
+    }
+
+    #[test]
+    fn extended_session_transition_preserves_security_state() {
+        // Switching to a non-default session (e.g. extended diagnostic = 0x03)
+        // must NOT clear authentication — only the default session reset does.
+        let mut policy = UdsPolicy::new();
+        policy.allow_sid(SID_DIAGNOSTIC_SESSION_CONTROL);
+        let mut gw =
+            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let tester = 0x0FA1;
+
+        assert!(authenticate(&mut gw, tester, 1_000));
+
+        let d = gw.receive_uds_request(
+            tester,
+            SID_DIAGNOSTIC_SESSION_CONTROL,
+            &[0x03], // extended diagnostic session
+            2_000,
+        );
+        assert_eq!(d, DiagDecision::Forward);
+
+        let idx = gw.find_session(tester).expect("session still alive");
+        assert!(
+            gw.sessions[idx].authenticated,
+            "auth flag must be preserved on non-default session transition"
+        );
+        assert_eq!(gw.sessions[idx].security_level, 1);
+        assert_eq!(gw.sessions[idx].session_type, 0x03);
     }
 
     #[test]
