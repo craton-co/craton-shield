@@ -383,6 +383,11 @@ pub fn verify_snapshot(
     if snapshot.version != timestamp.snapshot_version {
         return Err(VsError::IntegrityFailure);
     }
+    // Bind the freshness window on the struct to the one that was signed,
+    // for parity with `verify_timestamp` (TUF metadata-consistency rule).
+    if metadata.expires_us != snapshot.expires_us {
+        return Err(VsError::IntegrityFailure);
+    }
     if !vs_types::constant_time_eq_32(&metadata.content_hash, &timestamp.snapshot_hash) {
         return Err(VsError::IntegrityFailure);
     }
@@ -401,6 +406,11 @@ pub fn verify_targets(
     crypto: &impl CryptoProvider,
 ) -> Result<(), VsError> {
     if targets.version != snapshot.targets_version {
+        return Err(VsError::IntegrityFailure);
+    }
+    // Bind the freshness window on the struct to the one that was signed,
+    // for parity with `verify_timestamp` (TUF metadata-consistency rule).
+    if metadata.expires_us != targets.expires_us {
         return Err(VsError::IntegrityFailure);
     }
     if !vs_types::constant_time_eq_32(&metadata.content_hash, &snapshot.targets_hash) {
@@ -1968,6 +1978,30 @@ mod tests {
     }
 
     #[test]
+    fn verify_snapshot_expires_mismatch_rejected() {
+        let root = make_root(1, 10_000_000, 2, 1);
+        let validator = OtaValidator::new(TestCrypto, root).unwrap();
+
+        let timestamp = TufTimestamp {
+            version: 1,
+            expires_us: 5_000_000,
+            snapshot_version: 3,
+            snapshot_hash: make_hash(0xCC),
+        };
+        let snapshot = TufSnapshot {
+            version: 3,
+            expires_us: 9_000_000, // differs from metadata.expires_us below
+            targets_version: 2,
+            targets_hash: make_hash(0xDD),
+        };
+        let sigs = [make_sig(1, 0xCC)];
+        let metadata = make_signed_metadata(3, 5_000_000, &sigs, 0xCC);
+
+        let result = validator.verify_snapshot(&metadata, &snapshot, &timestamp, 100);
+        assert_eq!(result, Err(VsError::IntegrityFailure));
+    }
+
+    #[test]
     fn verify_targets_valid() {
         let root = make_root(1, 10_000_000, 2, 1);
         let validator = OtaValidator::new(TestCrypto, root).unwrap();
@@ -2004,6 +2038,29 @@ mod tests {
         let targets = TufTargets {
             version: 2, // mismatch
             expires_us: 5_000_000,
+            targets: [None, None, None, None, None, None, None, None],
+        };
+        let sigs = [make_sig(1, 0xDD)];
+        let metadata = make_signed_metadata(2, 5_000_000, &sigs, 0xDD);
+
+        let result = validator.verify_targets(&metadata, &targets, &snapshot, 100);
+        assert_eq!(result, Err(VsError::IntegrityFailure));
+    }
+
+    #[test]
+    fn verify_targets_expires_mismatch_rejected() {
+        let root = make_root(1, 10_000_000, 2, 1);
+        let validator = OtaValidator::new(TestCrypto, root).unwrap();
+
+        let snapshot = TufSnapshot {
+            version: 1,
+            expires_us: 5_000_000,
+            targets_version: 2,
+            targets_hash: make_hash(0xDD),
+        };
+        let targets = TufTargets {
+            version: 2,
+            expires_us: 9_000_000, // differs from metadata.expires_us below
             targets: [None, None, None, None, None, None, None, None],
         };
         let sigs = [make_sig(1, 0xDD)];
