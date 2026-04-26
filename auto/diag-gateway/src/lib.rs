@@ -813,12 +813,7 @@ impl<C: CryptoProvider> DiagGateway<C> {
                         unsafe { core::ptr::write_volatile(b, 0) };
                     }
                 }
-                core::hint::black_box(
-                    self.sessions[idx]
-                        .pending_seed
-                        .as_ref()
-                        .map(|s| s.as_ptr()),
-                );
+                core::hint::black_box(self.sessions[idx].pending_seed.as_ref().map(|s| s.as_ptr()));
                 self.sessions[idx].pending_seed = None;
             }
         }
@@ -2058,8 +2053,7 @@ mod tests {
         policy.allow_sid(0x22);
         policy.set_min_security_level(0x22, 2);
 
-        let mut gw =
-            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0F80;
 
         // Authenticate at level 1 (sub-function 0x01).
@@ -2084,8 +2078,7 @@ mod tests {
         policy.allow_sid(0x22);
         policy.set_min_security_level(0x22, 2);
 
-        let mut gw =
-            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0F81;
 
         // Seed request for level 2 (sub-function 0x03).
@@ -2117,8 +2110,7 @@ mod tests {
         // forwardable without authentication.
         let mut policy = UdsPolicy::new();
         policy.allow_sid(0x10);
-        let mut gw =
-            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let d = gw.receive_uds_request(0x0F90, 0x10, &[], 1_000);
         assert_eq!(d, DiagDecision::Forward);
     }
@@ -2131,8 +2123,7 @@ mod tests {
         // remains alive.
         let mut policy = UdsPolicy::new();
         policy.allow_sid(SID_DIAGNOSTIC_SESSION_CONTROL);
-        let mut gw =
-            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0FA0;
 
         // Authenticate at level 1.
@@ -2177,8 +2168,7 @@ mod tests {
         // must NOT clear authentication — only the default session reset does.
         let mut policy = UdsPolicy::new();
         policy.allow_sid(SID_DIAGNOSTIC_SESSION_CONTROL);
-        let mut gw =
-            DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0FA1;
 
         assert!(authenticate(&mut gw, tester, 1_000));
