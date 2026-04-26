@@ -459,6 +459,22 @@ const LIN_RATE_TOKENS_PER_SEC: u64 = 500;
 const FLEXRAY_RATE_CAPACITY: u64 = 2000;
 const FLEXRAY_RATE_TOKENS_PER_SEC: u64 = 2000;
 
+/// UDS request rate limiter capacity (max burst).
+///
+/// Default: 200 requests. Sized to absorb a normal seed-key handshake plus
+/// a handful of follow-on diagnostic reads without rate-limiting a
+/// well-behaved tester, while bounding the burst rate that a misbehaving
+/// caller can inflict on the gateway.
+pub const UDS_RATE_CAPACITY: u64 = 200;
+/// UDS request refill rate (tokens per second).
+///
+/// Default: 200 requests/sec. UDS traffic is interactive and ECU-bound;
+/// production OEM diagnostic tools typically issue tens of requests per
+/// second at peak, so 200 req/s leaves comfortable headroom while still
+/// flagging flood scenarios. Override at build time if your OEM tooling
+/// requires a different bound.
+pub const UDS_RATE_TOKENS_PER_SEC: u64 = 200;
+
 /// Magic number for `VsCryptoCallbacks` validity checking.
 #[cfg(feature = "production")]
 pub const VS_CRYPTO_CALLBACKS_MAGIC: u32 = 0xC5A7_0001;
@@ -780,6 +796,17 @@ static FLEXRAY_RATE_LIMITER: Mutex<TokenBucket> = Mutex::new(TokenBucket::new(
     FLEXRAY_RATE_TOKENS_PER_SEC,
 ));
 
+/// UDS request rate limiter.
+///
+/// Bounds the rate at which `vs_auto_uds_request` can be invoked from the
+/// FFI boundary. Without this, a misbehaving C caller (or a compromised
+/// upper-layer service) could flood the gateway with UDS requests, denying
+/// service to legitimate diagnostic tools and inflating the audit log.
+/// Default: 200 req/s (capacity 200) — see `UDS_RATE_CAPACITY` /
+/// `UDS_RATE_TOKENS_PER_SEC`.
+static UDS_RATE_LIMITER: Mutex<TokenBucket> =
+    Mutex::new(TokenBucket::new(UDS_RATE_CAPACITY, UDS_RATE_TOKENS_PER_SEC));
+
 /// Monotonic timestamp for rate limiter refills.
 /// Uses `AtomicU64` to avoid locking for timestamp reads.
 static LAST_MONOTONIC_US: AtomicU64 = AtomicU64::new(0);
@@ -838,6 +865,9 @@ pub extern "C" fn vs_auto_platform_init() -> VsResult {
             limiter.reset();
         }
         if let Ok(mut limiter) = FLEXRAY_RATE_LIMITER.lock() {
+            limiter.reset();
+        }
+        if let Ok(mut limiter) = UDS_RATE_LIMITER.lock() {
             limiter.reset();
         }
 
@@ -925,6 +955,9 @@ pub unsafe extern "C" fn vs_auto_platform_init_with_crypto(
             limiter.reset();
         }
         if let Ok(mut limiter) = FLEXRAY_RATE_LIMITER.lock() {
+            limiter.reset();
+        }
+        if let Ok(mut limiter) = UDS_RATE_LIMITER.lock() {
             limiter.reset();
         }
 
@@ -1222,6 +1255,9 @@ pub extern "C" fn vs_auto_platform_shutdown() -> VsResult {
                 if let Ok(mut limiter) = FLEXRAY_RATE_LIMITER.lock() {
                     limiter.reset();
                 }
+                if let Ok(mut limiter) = UDS_RATE_LIMITER.lock() {
+                    limiter.reset();
+                }
 
                 VsResult::ok()
             }
@@ -1287,7 +1323,8 @@ pub struct VsUdsDecision {
     pub decision: i32,
     /// Block reason (only valid when decision == 1):
     /// 0 = Unauthorized, 1 = `LockedOut`, 2 = `SessionExpired`,
-    /// 3 = `PolicyDenied`, 4 = `SessionsFull`
+    /// 3 = `PolicyDenied`, 4 = `SessionsFull`,
+    /// 5 = `SecurityAccessDenied` (NRC 0x33).
     pub block_reason: i32,
     /// Challenge seed (only valid when decision == 2).
     pub seed: [u8; 16],
@@ -1407,6 +1444,15 @@ pub unsafe extern "C" fn vs_auto_submit_flexray_frame(frame: *const VsFlexRayFra
 
 /// Process a UDS diagnostic request and return the gateway decision.
 ///
+/// # Rate limiting
+///
+/// Calls are governed by a token-bucket rate limiter sized at
+/// `UDS_RATE_CAPACITY` / `UDS_RATE_TOKENS_PER_SEC` (default 200 req/s).
+/// When the bucket is empty the call short-circuits with
+/// `VS_ERR_RATE_LIMITED` *before* the platform lock is acquired and before
+/// any UDS state is modified — a flooding caller cannot inflate the audit
+/// log nor advance lockout counters.
+///
 /// # Safety
 ///
 /// `request` must point to a valid `VsUdsRequest`.
@@ -1430,6 +1476,20 @@ pub unsafe extern "C" fn vs_auto_uds_request(
 
         let req = unsafe { &*request };
         let payload_len = (req.payload_len as usize).min(256);
+
+        // UDS rate-limit check. Acquired and released before the platform
+        // lock so concurrent callers contend only on the lightweight
+        // counter, never on the full platform state.
+        {
+            let now_us = monotonic_now_us();
+            LAST_MONOTONIC_US.store(now_us, Ordering::Relaxed);
+            let Ok(mut limiter) = UDS_RATE_LIMITER.lock() else {
+                return VsResult::internal();
+            };
+            if !limiter.try_consume(now_us) {
+                return VsResult::rate_limited();
+            }
+        }
 
         let Ok(mut guard) = PLATFORM.write() else {
             return VsResult::internal();
@@ -1456,6 +1516,7 @@ pub unsafe extern "C" fn vs_auto_uds_request(
                             vs_diag_gateway::BlockReason::SessionExpired => 2,
                             vs_diag_gateway::BlockReason::PolicyDenied => 3,
                             vs_diag_gateway::BlockReason::SessionsFull => 4,
+                            vs_diag_gateway::BlockReason::SecurityAccessDenied => 5,
                         };
                         VsUdsDecision {
                             decision: 1,
@@ -2101,6 +2162,156 @@ mod tests {
         assert_eq!(status_to_i32(SubsystemStatus::Degraded), 1);
         assert_eq!(status_to_i32(SubsystemStatus::Failed), 2);
         assert_eq!(status_to_i32(SubsystemStatus::NotInitialized), 3);
+    }
+
+    // ---- UDS rate-limiter unit tests (TokenBucket-level) ----
+
+    #[test]
+    fn uds_rate_limit_default_constants() {
+        // Compile-time guard: defaults must remain at the documented value
+        // (200 req/s with capacity 200) so the public `UDS_RATE_*` constants
+        // and the rate-limit comment in `vs_auto_uds_request` stay in sync.
+        assert_eq!(UDS_RATE_CAPACITY, 200);
+        assert_eq!(UDS_RATE_TOKENS_PER_SEC, 200);
+    }
+
+    #[test]
+    fn uds_rate_limit_token_bucket_fires_after_cap() {
+        // Drive a bucket sized to the public UDS rate-limiter defaults and
+        // confirm that the (cap+1)-th request within the same window is
+        // rejected, then the bucket refills after one full window.
+        let mut bucket = TokenBucket::new(UDS_RATE_CAPACITY, UDS_RATE_TOKENS_PER_SEC);
+        // Drain at t=0.
+        for _ in 0..UDS_RATE_CAPACITY {
+            assert!(bucket.try_consume(0));
+        }
+        // (cap+1)-th call within the same window must fail.
+        assert!(
+            !bucket.try_consume(0),
+            "bucket must reject once cap tokens consumed"
+        );
+        // After 1s the bucket has been fully refilled (rate == capacity).
+        assert!(
+            bucket.try_consume(1_000_000),
+            "bucket must allow a request again after the refill window"
+        );
+    }
+
+    #[test]
+    fn uds_rate_limit_resets_after_window() {
+        // After draining the bucket, advancing time by exactly one second
+        // must restore the full capacity.
+        let mut bucket = TokenBucket::new(UDS_RATE_CAPACITY, UDS_RATE_TOKENS_PER_SEC);
+        for _ in 0..UDS_RATE_CAPACITY {
+            assert!(bucket.try_consume(0));
+        }
+        assert!(!bucket.try_consume(0));
+
+        // 1 second later the bucket should be back at capacity.
+        let mut allowed = 0u64;
+        for _ in 0..=UDS_RATE_CAPACITY {
+            if bucket.try_consume(1_000_000) {
+                allowed += 1;
+            }
+        }
+        assert_eq!(
+            allowed, UDS_RATE_CAPACITY,
+            "after refill window the bucket must allow exactly capacity tokens"
+        );
+    }
+
+    // ---- UDS rate-limit FFI integration test ----
+
+    #[test]
+    fn uds_request_rate_limit_returns_rate_limited() {
+        // Drive the live `vs_auto_uds_request` FFI entry point with an
+        // emptied rate-limit bucket and confirm that:
+        //   1. The next call returns VS_ERR_RATE_LIMITED.
+        //   2. After resetting the limiter (simulating a refill window),
+        //      a subsequent call no longer returns VS_ERR_RATE_LIMITED.
+        // The global `PLATFORM` is intentionally left uninitialized — we only
+        // care about the rate-limit check, which occurs *before* the platform
+        // lookup, so VS_ERR_NOT_INITIALIZED is the expected post-refill
+        // return code.
+        //
+        // The bucket is drained directly (rather than by issuing
+        // `UDS_RATE_CAPACITY` real FFI calls) because the limiter refills
+        // continuously at `UDS_RATE_TOKENS_PER_SEC`. Wall-clock elapsed time
+        // during a `cap`-iteration loop would otherwise grant enough refills
+        // to make this assertion racy. The internal drain still exercises the
+        // public FFI return code paths.
+        let _guard = FFI_TEST_LOCK.lock().expect("lock poisoned");
+        let builder = std::thread::Builder::new().stack_size(8 * 1024 * 1024);
+        let handle = builder
+            .spawn(|| {
+                let _ = vs_auto_platform_shutdown();
+
+                let req = VsUdsRequest {
+                    tester_addr: 0x100,
+                    sid: 0x10,
+                    payload_len: 0,
+                    payload: [0u8; 256],
+                    timestamp_us: 1_000,
+                };
+                let mut decision = core::mem::MaybeUninit::<VsUdsDecision>::uninit();
+
+                // Drain the bucket and then issue a flood of FFI calls.
+                // Even with continuous refill at `UDS_RATE_TOKENS_PER_SEC`,
+                // the burst rate of a tight-loop caller vastly exceeds the
+                // refill rate, so VS_ERR_RATE_LIMITED MUST appear at some
+                // point in the sequence — that is precisely the property
+                // the rate-limit fix is designed to enforce.
+                {
+                    let mut limiter = UDS_RATE_LIMITER.lock().expect("lock");
+                    limiter.reset();
+                    let now = monotonic_now_us();
+                    while limiter.try_consume(now) {}
+                }
+
+                let mut saw_rate_limited = false;
+                // Issue significantly more requests than the bucket capacity
+                // so that even with continuous refill the cap is exceeded.
+                for _ in 0..(UDS_RATE_CAPACITY * 4) {
+                    let r = unsafe { vs_auto_uds_request(&raw const req, decision.as_mut_ptr()) };
+                    if r.code == VS_ERR_RATE_LIMITED {
+                        saw_rate_limited = true;
+                        break;
+                    }
+                    assert_eq!(
+                        r.code, VS_ERR_NOT_INITIALIZED,
+                        "non-rate-limit failures must be NOT_INITIALIZED"
+                    );
+                }
+                assert!(
+                    saw_rate_limited,
+                    "rate-limit must fire when callers exceed UDS_RATE_TOKENS_PER_SEC"
+                );
+
+                // Reset the limiter (simulating a full refill window) and
+                // verify the next call is no longer rate-limited.
+                {
+                    let mut limiter = UDS_RATE_LIMITER.lock().expect("lock");
+                    limiter.reset();
+                }
+                let r = unsafe { vs_auto_uds_request(&raw const req, decision.as_mut_ptr()) };
+                assert_ne!(
+                    r.code, VS_ERR_RATE_LIMITED,
+                    "after refill the rate-limit must release"
+                );
+                // Platform is uninitialized, so the post-refill code path
+                // must be VS_ERR_NOT_INITIALIZED, confirming the rate-limit
+                // check was the only gate that previously rejected the call.
+                assert_eq!(r.code, VS_ERR_NOT_INITIALIZED);
+
+                // Leave the bucket full so other tests don't see drained
+                // tokens leaked from this one.
+                {
+                    let mut limiter = UDS_RATE_LIMITER.lock().expect("lock");
+                    limiter.reset();
+                }
+            })
+            .expect("spawn");
+        handle.join().expect("thread panicked");
     }
 
     // ---- Stub detection tests ----
