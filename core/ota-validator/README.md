@@ -36,8 +36,12 @@ validator.verify_target(&expected_hash, firmware_bytes.len() as u64, firmware_by
 
 ## Feature Flags
 
-See [docs/feature-flags.md](../../docs/feature-flags.md) for the full workspace feature reference.
+- `default = []` — core verification only (`no_std`, no allocation).
+- `json` — enables the `json` module for parsing TUF metadata from
+  canonical JSON byte slices (`parse_tuf_root_with_hash`,
+  `parse_signed_metadata`, `parse_tuf_timestamp`, `parse_tuf_snapshot`,
+  `parse_tuf_targets`). Pulls in `serde` and `serde-json-core`.
 
 ## License
 
-Apache-2.0. See [LICENSE](../../LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
