@@ -26,12 +26,18 @@ version counters, and verifies firmware target hashes before installation.
 
 ```rust,ignore
 use vs_ota_validator::{OtaValidator, TufRoot};
+use vs_types::VsError;
 
 // `crypto` is any `vs_crypto::CryptoProvider`, `root` is a `TufRoot`.
-let validator = OtaValidator::new(crypto, root)?;
+fn install(crypto: impl vs_crypto::CryptoProvider, root: TufRoot) -> Result<(), VsError> {
+    let validator = OtaValidator::new(crypto, root)?;
 
-// Verify a firmware blob against its expected SHA-256 hash and length.
-validator.verify_target(&expected_hash, firmware_bytes.len() as u64, firmware_bytes)?;
+    // Verify a firmware blob against its expected SHA-256 hash and length.
+    let expected_hash = [0u8; 32];
+    let firmware_bytes: &[u8] = b"...";
+    validator.verify_target(&expected_hash, firmware_bytes.len() as u64, firmware_bytes)?;
+    Ok(())
+}
 ```
 
 ## Feature Flags
