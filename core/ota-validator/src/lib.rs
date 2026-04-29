@@ -16,7 +16,8 @@
 //! `verify_timestamp` / `verify_snapshot` / `verify_targets` /
 //! `verify_vehicle_manifest` functions, and the `TufRoot` / `TufTimestamp`
 //! / `TufSnapshot` / `TufTargets` / `SignedMetadata` / `VehicleManifest`
-//! types form the v1.0 stable surface and are governed by `DEPRECATION.md`.
+//! types form the v1.0 stable surface; breaking changes to them follow
+//! the workspace semantic-versioning policy.
 
 use vs_crypto::CryptoProvider;
 use vs_storage::StorageProvider;
