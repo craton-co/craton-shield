@@ -62,6 +62,18 @@ pub const MAX_FRESHNESS_LEN: usize = 8;
 /// Maximum MAC truncation length in bytes.
 pub const MAX_MAC_LEN: usize = 16;
 
+/// Minimum MAC truncation length in bytes per the `SecOC` specification.
+///
+/// AUTOSAR `SecOC` allows MAC truncation, but the truncated MAC must be at
+/// least 32 bits (4 bytes) wide. Anything shorter has too few bits of
+/// integrity to provide meaningful authentication — a 24-bit tag, for
+/// example, can be brute-forced in roughly 2^23 attempts.
+///
+/// This is enforced both at PDU registration time (config-load) and at
+/// Tx/Rx time as a belt-and-suspenders defense in case a config is bypassed
+/// or mutated after registration.
+pub const MAC_LEN_4: u8 = 4;
+
 /// Result of `SecOC` verification on an incoming PDU.
 #[must_use]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +273,13 @@ impl<C: SecOcCrypto> SecOcManager<C> {
         if config.mac_len == 0 || config.mac_len as usize > MAX_MAC_LEN {
             return Err(VsError::PolicyViolation);
         }
+        // SecOC spec: truncated MAC must be at least MAC_LEN_4 (32 bits) to
+        // provide meaningful integrity. Anything shorter (e.g. 24 bits) is
+        // rejected with `InvalidConfig` so callers can distinguish "I asked
+        // for an unsupported length" from "I tried to disable MAC entirely".
+        if config.mac_len < MAC_LEN_4 {
+            return Err(VsError::InvalidConfig);
+        }
         if config.freshness_len == 0 || config.freshness_len as usize > MAX_FRESHNESS_LEN {
             return Err(VsError::PolicyViolation);
         }
@@ -359,6 +378,16 @@ impl<C: SecOcCrypto> SecOcManager<C> {
         let fv_len = pdu.freshness_len as usize;
         let trailer_len = fv_len + mac_len;
         let dlc = frame.dlc as usize;
+
+        // Belt-and-suspenders: refuse to verify against a MAC shorter than
+        // `MAC_LEN_4`. `register_pdu` already rejects this, but a stored
+        // config could have been mutated by an out-of-tree adapter or
+        // memory-corruption attack. Failing closed here turns that bypass
+        // into a `MacMismatch` rather than silently accepting a 24-bit tag.
+        if pdu.mac_len < MAC_LEN_4 {
+            self.verify_fail_count = self.verify_fail_count.saturating_add(1);
+            return SecOcVerifyResult::MacMismatch;
+        }
 
         // Guard against DLC exceeding the RawCanFrame data array (64 bytes).
         if dlc > 64 {
@@ -482,6 +511,12 @@ impl<C: SecOcCrypto> SecOcManager<C> {
         let mac_len = pdu.mac_len as usize;
         let fv_len = pdu.freshness_len as usize;
         let new_dlc = auth_data_len + fv_len + mac_len;
+
+        // Belt-and-suspenders: refuse to emit a frame whose configured MAC
+        // is shorter than `MAC_LEN_4`. Mirrors the guard in `verify_rx`.
+        if pdu.mac_len < MAC_LEN_4 {
+            return Err(VsError::InvalidConfig);
+        }
 
         if new_dlc > 64 {
             return Err(VsError::ResourceExhausted);
@@ -2369,6 +2404,75 @@ mod tests {
         assert_eq!(mgr.register_pdu(cfg), Err(VsError::PolicyViolation));
         cfg.mac_len = 17; // > MAX_MAC_LEN
         assert_eq!(mgr.register_pdu(cfg), Err(VsError::PolicyViolation));
+    }
+
+    #[test]
+    fn secoc_mac_len_below_min_rejected() {
+        // Per the SecOC spec, a truncated MAC must be at least MAC_LEN_4.
+        // mac_len = 3 is "non-zero but too short" and must be rejected with
+        // InvalidConfig, distinct from the PolicyViolation that mac_len = 0
+        // (disabled MAC) or mac_len > MAX_MAC_LEN (out of range) returns.
+        let mut mgr = SecOcManager::new(StubCrypto, 100_000);
+        let mut cfg = make_rx_config(0x100);
+        cfg.mac_len = 3;
+        assert_eq!(mgr.register_pdu(cfg), Err(VsError::InvalidConfig));
+        cfg.mac_len = 1;
+        assert_eq!(mgr.register_pdu(cfg), Err(VsError::InvalidConfig));
+        cfg.mac_len = 2;
+        assert_eq!(mgr.register_pdu(cfg), Err(VsError::InvalidConfig));
+    }
+
+    #[test]
+    fn secoc_mac_len_4_accepted() {
+        let mut mgr = SecOcManager::new(StubCrypto, 100_000);
+        let mut cfg = make_rx_config(0x101);
+        cfg.mac_len = MAC_LEN_4;
+        assert!(mgr.register_pdu(cfg).is_ok());
+    }
+
+    #[test]
+    fn secoc_mac_len_8_accepted() {
+        let mut mgr = SecOcManager::new(StubCrypto, 100_000);
+        let mut cfg = make_rx_config(0x102);
+        cfg.mac_len = 8;
+        assert!(mgr.register_pdu(cfg).is_ok());
+    }
+
+    #[test]
+    fn secoc_verify_time_guard_rejects_short_mac() {
+        // Belt-and-suspenders: even if a config is mutated post-load to set
+        // mac_len below MAC_LEN_4 (simulating bypass of register_pdu), the
+        // verify path must refuse to authenticate the frame and return
+        // MacMismatch rather than silently accepting a too-short tag.
+        let mut mgr = SecOcManager::new(StubCrypto, 100_000);
+        mgr.register_pdu(make_tx_config(0x500)).unwrap();
+        let rx_slot = mgr.register_pdu(make_rx_config(0x500)).unwrap();
+
+        let mut frame = RawCanFrame::zeroed();
+        frame.id = 0x500;
+        frame.data[0] = 0x01;
+        mgr.prepare_tx(&mut frame, 1, 1000).unwrap();
+
+        // Forge a config that bypassed register_pdu's check.
+        mgr.pdus[rx_slot].mac_len = 3;
+
+        assert_eq!(mgr.verify_rx(&frame, 1000), SecOcVerifyResult::MacMismatch,);
+        assert!(mgr.verify_fail_count >= 1);
+    }
+
+    #[test]
+    fn secoc_prepare_tx_guard_rejects_short_mac() {
+        // Symmetric belt-and-suspenders for the Tx path.
+        let mut mgr = SecOcManager::new(StubCrypto, 100_000);
+        let tx_slot = mgr.register_pdu(make_tx_config(0x501)).unwrap();
+        mgr.pdus[tx_slot].mac_len = 2;
+
+        let mut frame = RawCanFrame::zeroed();
+        frame.id = 0x501;
+        assert_eq!(
+            mgr.prepare_tx(&mut frame, 1, 1000),
+            Err(VsError::InvalidConfig),
+        );
     }
 
     #[test]

@@ -1140,10 +1140,7 @@ mod tests {
         bytes[2] = 0x01; // S-format marker
         bytes[3] = 0x00;
         // bytes[4..6] = recv seq, bytes[6..12] = forbidden ASDU body
-        assert_eq!(
-            parse_apdu(&bytes),
-            Err(Iec60870ParseError::UnexpectedAsdu),
-        );
+        assert_eq!(parse_apdu(&bytes), Err(Iec60870ParseError::UnexpectedAsdu),);
     }
 
     #[test]
