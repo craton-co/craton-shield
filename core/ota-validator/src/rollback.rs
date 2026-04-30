@@ -305,7 +305,7 @@ mod tests {
             _data: &[u8],
             _mac_out: &mut [u8; 32],
         ) -> Result<(), VsError> {
-            // Explicit (no trait-level default as of v0.9). The mock does
+            // Explicit (no trait-level default as of v0.7.1). The mock does
             // not back HMAC; callers must consult `capabilities()`.
             Err(VsError::NotInitialized)
         }
@@ -316,7 +316,7 @@ mod tests {
             _peer_public: &[u8; 65],
             _shared_out: &mut [u8; 32],
         ) -> Result<(), VsError> {
-            // Explicit (no trait-level default as of v0.9). The mock does
+            // Explicit (no trait-level default as of v0.7.1). The mock does
             // not back ECDH; callers must consult `capabilities()`.
             Err(VsError::NotInitialized)
         }
