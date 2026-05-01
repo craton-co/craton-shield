@@ -43,8 +43,8 @@
 use vs_types::{AlertSeverity, SecurityAlert, VsError};
 use vs_types_embedded::{
     compute_payload_hash, ct_u16_eq, MonitorReset, TimestampValidator, TrustCenterEvent,
-    ZigbeeFrame, ZigbeeFrameType, ZigbeeSecurityCounter, MAX_ZIGBEE_ADDR_RULES,
-    MAX_ZIGBEE_RATE_BUCKETS, MAX_ZIGBEE_SECURITY_COUNTERS, SOURCE_ZIGBEE,
+    ZigbeeFrame, ZigbeeFrameType, MAX_ZIGBEE_ADDR_RULES, MAX_ZIGBEE_RATE_BUCKETS,
+    MAX_ZIGBEE_SECURITY_COUNTERS, SOURCE_ZIGBEE,
 };
 
 // ---------------------------------------------------------------------------
@@ -75,7 +75,22 @@ const MAX_RATE_BUCKETS: usize = MAX_ZIGBEE_RATE_BUCKETS;
 const RATE_BUCKET_EXPIRY_US: u64 = 300_000_000;
 
 /// Maximum number of tracked security frame counters (imported from types-embedded).
+///
+/// Each entry holds a per-device sliding window: `(highest_seen, recent_bitmap)`
+/// keyed by source address. When this cap is reached new devices evict the
+/// least-recently-used entry.
 const MAX_SECURITY_COUNTERS: usize = MAX_ZIGBEE_SECURITY_COUNTERS;
+
+/// Maximum forward jump (in counters) accepted on a single advance.
+///
+/// A jump beyond this window is treated as a suspicious-jump replay attempt
+/// (e.g. an attacker injecting a frame with a fabricated counter chosen to
+/// lock out the legitimate device). 2^15 = 32768 leaves generous headroom for
+/// legitimate frame loss.
+const ACCEPT_FORWARD_WINDOW: u32 = 1 << 15;
+
+/// Top-of-range threshold above which a 0xFFFFFFFF -> 0 rollover is plausible.
+const ROLLOVER_TOP_THRESHOLD: u32 = 0xFFFF_0000;
 
 /// Maximum Trust Center events tracked in the sliding window.
 const MAX_TC_EVENTS: usize = 16;
@@ -169,6 +184,45 @@ impl RateBucket {
     #[inline]
     fn is_expired(&self, now_us: u64) -> bool {
         now_us.saturating_sub(self.last_refill_us) > RATE_BUCKET_EXPIRY_US
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-device frame counter window
+// ---------------------------------------------------------------------------
+
+/// Per-device frame-counter sliding window for replay protection.
+///
+/// Stores the highest counter value seen for a given source address along
+/// with a 64-bit bitmap of the 64 counters strictly below it. Bit `b` of
+/// `recent_bitmap` is set when counter `highest_seen - 1 - b` has been
+/// observed. This lets us accept moderately-out-of-order delivery while
+/// rejecting replays.
+#[derive(Debug, Clone, Copy)]
+struct FrameCounterWindow {
+    /// Source short address.
+    src_addr: u16,
+    /// Highest counter value seen for this device.
+    highest_seen: u32,
+    /// Bitmap of recent counters strictly below `highest_seen`. Bit `b`
+    /// represents counter `highest_seen - 1 - b` (so bit 0 is one below
+    /// the highest, bit 63 is 64 below).
+    recent_bitmap: u64,
+    /// Last activity timestamp for LRU eviction.
+    last_activity_us: u64,
+    /// Whether this entry is active.
+    active: bool,
+}
+
+impl FrameCounterWindow {
+    const fn empty() -> Self {
+        Self {
+            src_addr: 0xFFFF,
+            highest_seen: 0,
+            recent_bitmap: 0,
+            last_activity_us: 0,
+            active: false,
+        }
     }
 }
 
@@ -284,8 +338,16 @@ pub struct ZigbeeMonitor {
     total_alerts: u64,
     /// Timestamp validator for clock anomaly detection.
     timestamp_validator: TimestampValidator,
-    /// Security frame counter tracker for replay protection.
-    security_counters: [ZigbeeSecurityCounter; MAX_SECURITY_COUNTERS],
+    /// Per-device frame-counter sliding windows for replay protection.
+    ///
+    /// Each entry stores `(highest_seen, recent_bitmap)` keyed by source
+    /// address, giving each device an independent replay window so an
+    /// attacker cannot replay one device's old frames against another.
+    security_counters: [FrameCounterWindow; MAX_SECURITY_COUNTERS],
+    /// Whether 32-bit counter rollover is allowed for honest devices that
+    /// wrap 0xFFFFFFFF -> 0. Rollover is only accepted when `highest_seen`
+    /// is in the top of the range (`>= ROLLOVER_TOP_THRESHOLD`).
+    allow_counter_rollover: bool,
     /// Trust Center event ring buffer.
     tc_events: [TcEventRecord; MAX_TC_EVENTS],
     /// Next write position in the TC event ring buffer.
@@ -295,10 +357,6 @@ pub struct ZigbeeMonitor {
     /// Deferred table-exhaustion flags (can fire both in the same inspection).
     rate_table_exhausted: bool,
     counter_table_exhausted: bool,
-    /// Minimum counter floor: when a security counter entry is evicted, its
-    /// frame counter is recorded here so that newly seen addresses cannot
-    /// replay frames with counters at or below the evicted value.
-    min_counter_floor: u32,
 }
 
 impl ZigbeeMonitor {
@@ -314,14 +372,25 @@ impl ZigbeeMonitor {
             total_inspected: 0,
             total_alerts: 0,
             timestamp_validator: TimestampValidator::new(),
-            security_counters: [ZigbeeSecurityCounter::empty(); MAX_SECURITY_COUNTERS],
+            security_counters: [FrameCounterWindow::empty(); MAX_SECURITY_COUNTERS],
+            allow_counter_rollover: false,
             tc_events: [TcEventRecord::empty(); MAX_TC_EVENTS],
             tc_event_cursor: 0,
             tc_rapid_rotation_alerts: 0,
             rate_table_exhausted: false,
             counter_table_exhausted: false,
-            min_counter_floor: 0,
         }
+    }
+
+    /// Enable or disable acceptance of 32-bit frame-counter rollover.
+    ///
+    /// When enabled, a counter that wraps from `0xFFFFFFFF` to `0` (or
+    /// thereabouts) is accepted only if the previously seen value was in the
+    /// top of the range (>= `0xFFFF0000`). This prevents an attacker from
+    /// using a small counter to bypass replay protection on a freshly seen
+    /// device.
+    pub fn set_allow_counter_rollover(&mut self, allow: bool) {
+        self.allow_counter_rollover = allow;
     }
 
     /// Create a new Zigbee monitor (deny-by-default).
@@ -605,44 +674,51 @@ impl ZigbeeMonitor {
 
     /// Check a security frame counter for a source address.
     ///
-    /// Returns `true` if the counter is valid (strictly increasing).
-    /// Returns `false` if the counter indicates a replay attack.
+    /// Maintains a per-device sliding window `(highest_seen, recent_bitmap)`
+    /// of size 64 keyed by `src_addr`. Returns `true` if the counter is
+    /// valid (in-order, in-window forward jump, or out-of-order but unseen
+    /// within the window). Returns `false` for:
+    ///
+    /// * exact replay (counter == highest_seen, or already-set bit),
+    /// * out-of-window stale frame (counter < highest_seen - 63),
+    /// * suspicious forward jump (counter > highest_seen + ACCEPT_FORWARD_WINDOW),
+    /// * a fresh-looking small counter when rollover is disabled and the
+    ///   tracked highest is in the top of the range.
     ///
     /// When all counter slots are full, the least-recently-used entry
-    /// (smallest `last_activity_us`) is evicted to make room.
+    /// (smallest `last_activity_us`) is evicted to make room. Per-device
+    /// state is independent, so an evicted device's history does not gate
+    /// any other device's window.
     pub fn check_security_counter(&mut self, src_addr: u16, counter: u32, ts_us: u64) -> bool {
         // Look for existing entry.
         for i in 0..MAX_SECURITY_COUNTERS {
             if self.security_counters[i].active
                 && ct_u16_eq(self.security_counters[i].src_addr, src_addr)
             {
-                if counter <= self.security_counters[i].frame_counter {
-                    return false; // replay detected
-                }
-                self.security_counters[i].frame_counter = counter;
-                self.security_counters[i].last_activity_us = ts_us;
-                return true;
+                return Self::accept_into_window(
+                    &mut self.security_counters[i],
+                    counter,
+                    ts_us,
+                    self.allow_counter_rollover,
+                );
             }
-        }
-        // New address -- reject if counter is at or below the eviction floor
-        // to prevent replay attacks after counter table eviction.
-        if counter <= self.min_counter_floor {
-            return false;
         }
         // Not found -- allocate a new entry.
         for i in 0..MAX_SECURITY_COUNTERS {
             if !self.security_counters[i].active {
-                self.security_counters[i] = ZigbeeSecurityCounter {
+                self.security_counters[i] = FrameCounterWindow {
                     src_addr,
-                    frame_counter: counter,
+                    highest_seen: counter,
+                    recent_bitmap: 0,
                     last_activity_us: ts_us,
                     active: true,
                 };
                 return true;
             }
         }
-        // All slots full -- LRU eviction: find entry with smallest last_activity_us.
-        // Record the evicted entry's counter as a floor to prevent replay attacks.
+        // All slots full -- LRU eviction: find entry with smallest
+        // last_activity_us. Per-device windows are independent so no
+        // floor needs to be carried forward.
         self.counter_table_exhausted = true;
         let mut lru_idx = 0;
         let mut lru_ts = u64::MAX;
@@ -652,16 +728,89 @@ impl ZigbeeMonitor {
                 lru_idx = i;
             }
         }
-        let evicted_counter = self.security_counters[lru_idx].frame_counter;
-        if evicted_counter > self.min_counter_floor {
-            self.min_counter_floor = evicted_counter;
-        }
-        self.security_counters[lru_idx] = ZigbeeSecurityCounter {
+        self.security_counters[lru_idx] = FrameCounterWindow {
             src_addr,
-            frame_counter: counter,
+            highest_seen: counter,
+            recent_bitmap: 0,
             last_activity_us: ts_us,
             active: true,
         };
+        true
+    }
+
+    /// Apply the per-device window rules to an existing entry.
+    ///
+    /// Returns `true` if the counter is accepted (and the window is updated
+    /// in place), `false` if the counter must be rejected as a replay,
+    /// out-of-window, or suspicious-jump.
+    fn accept_into_window(
+        win: &mut FrameCounterWindow,
+        counter: u32,
+        ts_us: u64,
+        allow_rollover: bool,
+    ) -> bool {
+        let highest = win.highest_seen;
+
+        if counter > highest {
+            let advance = counter - highest;
+            if advance > ACCEPT_FORWARD_WINDOW {
+                // Suspicious forward jump.
+                return false;
+            }
+            // Shift the bitmap left by `advance`. Bit 0 records the previous
+            // highest. Anything shifted out beyond bit 63 falls off the
+            // window (those counters are now too old to track).
+            let shift = advance.min(64);
+            let new_bitmap = if shift >= 64 {
+                0u64
+            } else {
+                // After the shift, bit 0 corresponds to (counter - 1). The
+                // previous highest is at position (advance - 1). Set that
+                // bit to record that we did see it.
+                let shifted = win.recent_bitmap << shift;
+                shifted | (1u64 << (advance - 1))
+            };
+            win.recent_bitmap = new_bitmap;
+            win.highest_seen = counter;
+            win.last_activity_us = ts_us;
+            return true;
+        }
+
+        if counter == highest {
+            // Exact replay of the highest value.
+            return false;
+        }
+
+        // counter < highest: candidate older frame.
+        let diff = highest - counter;
+
+        // Detect plausible 32-bit rollover: an honest device that wrapped
+        // from 0xFFFFFFFF -> 0 will produce a small counter when the tracked
+        // highest is in the top of the range. Only accept when explicitly
+        // enabled by config.
+        if allow_rollover && highest >= ROLLOVER_TOP_THRESHOLD && counter < ACCEPT_FORWARD_WINDOW {
+            // Treat this like a fresh start past rollover: drop the old
+            // window and re-anchor at the new (small) counter.
+            win.highest_seen = counter;
+            win.recent_bitmap = 0;
+            win.last_activity_us = ts_us;
+            return true;
+        }
+
+        if diff > 64 {
+            // Too old: out of window.
+            return false;
+        }
+
+        // diff is in 1..=64. Bit position is diff - 1.
+        let bit = diff - 1;
+        let mask = 1u64 << bit;
+        if win.recent_bitmap & mask != 0 {
+            // Already seen this counter -- replay.
+            return false;
+        }
+        win.recent_bitmap |= mask;
+        win.last_activity_us = ts_us;
         true
     }
 
@@ -828,13 +977,12 @@ impl MonitorReset for ZigbeeMonitor {
         self.total_inspected = 0;
         self.total_alerts = 0;
         self.timestamp_validator.reset();
-        self.security_counters = [ZigbeeSecurityCounter::empty(); MAX_SECURITY_COUNTERS];
+        self.security_counters = [FrameCounterWindow::empty(); MAX_SECURITY_COUNTERS];
         self.tc_events = [TcEventRecord::empty(); MAX_TC_EVENTS];
         self.tc_event_cursor = 0;
         self.tc_rapid_rotation_alerts = 0;
         self.rate_table_exhausted = false;
         self.counter_table_exhausted = false;
-        self.min_counter_floor = 0;
     }
 }
 
@@ -1081,8 +1229,75 @@ mod tests {
     fn security_counter_detects_replay() {
         let mut mon = ZigbeeMonitor::new();
         assert!(mon.check_security_counter(0x0001, 10, 1000));
-        assert!(!mon.check_security_counter(0x0001, 10, 2000)); // same = replay
-        assert!(!mon.check_security_counter(0x0001, 5, 3000)); // lower = replay
+        // Same value = replay.
+        assert!(!mon.check_security_counter(0x0001, 10, 2000));
+        // Lower value not yet seen but in window: accepted as out-of-order delivery.
+        assert!(mon.check_security_counter(0x0001, 5, 3000));
+        // Re-trying counter 5 is now a replay (bit set).
+        assert!(!mon.check_security_counter(0x0001, 5, 4000));
+    }
+
+    #[test]
+    fn security_counter_replay_within_window_rejected() {
+        // Counter values within the 64-counter window that have already been
+        // recorded must be rejected as replays.
+        let mut mon = ZigbeeMonitor::new();
+        assert!(mon.check_security_counter(0x0010, 100, 1000));
+        // In-window forward jump records the bit.
+        assert!(mon.check_security_counter(0x0010, 110, 2000));
+        // Replaying 100 (now diff=10) is a replay.
+        assert!(!mon.check_security_counter(0x0010, 100, 3000));
+        // Highest value replayed.
+        assert!(!mon.check_security_counter(0x0010, 110, 4000));
+    }
+
+    #[test]
+    fn security_counter_old_frame_below_window_rejected() {
+        let mut mon = ZigbeeMonitor::new();
+        assert!(mon.check_security_counter(0x0010, 200, 1000));
+        // diff=64 is the boundary (still in window).
+        assert!(mon.check_security_counter(0x0010, 200 - 64, 2000));
+        // diff=65 is below the window.
+        assert!(!mon.check_security_counter(0x0010, 200 - 65, 3000));
+        // Far below the window.
+        assert!(!mon.check_security_counter(0x0010, 1, 4000));
+    }
+
+    #[test]
+    fn security_counter_forward_jump_within_window_accepts() {
+        let mut mon = ZigbeeMonitor::new();
+        assert!(mon.check_security_counter(0x0011, 100, 1000));
+        // Jump within the accept-forward window.
+        assert!(mon.check_security_counter(0x0011, 100 + ACCEPT_FORWARD_WINDOW, 2000));
+    }
+
+    #[test]
+    fn security_counter_forward_jump_beyond_window_rejected() {
+        let mut mon = ZigbeeMonitor::new();
+        assert!(mon.check_security_counter(0x0012, 100, 1000));
+        // Jump beyond ACCEPT_FORWARD_WINDOW: suspicious-jump replay.
+        assert!(!mon.check_security_counter(0x0012, 100 + ACCEPT_FORWARD_WINDOW + 1, 2000));
+    }
+
+    #[test]
+    fn security_counter_rollover_when_enabled_accepts() {
+        let mut mon = ZigbeeMonitor::new();
+        mon.set_allow_counter_rollover(true);
+        // Seed at top-of-range so rollover is plausible.
+        assert!(mon.check_security_counter(0x0013, 0xFFFF_FFF0, 1000));
+        // Honest device wraps to 0.
+        assert!(mon.check_security_counter(0x0013, 0, 2000));
+        // Continues from 0.
+        assert!(mon.check_security_counter(0x0013, 1, 3000));
+    }
+
+    #[test]
+    fn security_counter_rollover_when_disabled_rejects() {
+        let mut mon = ZigbeeMonitor::new();
+        // Default: rollover disabled.
+        assert!(mon.check_security_counter(0x0014, 0xFFFF_FFF0, 1000));
+        // Apparent wrap is treated as out-of-window stale frame.
+        assert!(!mon.check_security_counter(0x0014, 0, 2000));
     }
 
     #[test]
@@ -1090,8 +1305,40 @@ mod tests {
         let mut mon = ZigbeeMonitor::new();
         assert!(mon.check_security_counter(0x0001, 10, 1000));
         assert!(mon.check_security_counter(0x0002, 5, 2000)); // different addr
-        assert!(!mon.check_security_counter(0x0001, 10, 3000)); // replay on addr 1
+        // Replay of 10 on addr 1 is rejected.
+        assert!(!mon.check_security_counter(0x0001, 10, 3000));
         assert!(mon.check_security_counter(0x0002, 6, 4000)); // ok on addr 2
+    }
+
+    #[test]
+    fn security_counter_per_device_isolation() {
+        // Replays on one device must not be gated by another device's history:
+        // the per-device window means a fresh device can use any starting
+        // counter without inheriting a global floor.
+        let mut mon = ZigbeeMonitor::new();
+        assert!(mon.check_security_counter(0x00A0, 1_000_000, 1000));
+        // A different device legitimately starts at a much lower counter.
+        assert!(mon.check_security_counter(0x00A1, 5, 2000));
+        // And continues independently.
+        assert!(mon.check_security_counter(0x00A1, 6, 3000));
+    }
+
+    #[test]
+    fn security_counter_lru_eviction_works() {
+        let mut mon = ZigbeeMonitor::new();
+        // Fill all slots with distinct addresses.
+        for i in 0..MAX_SECURITY_COUNTERS as u16 {
+            assert!(mon.check_security_counter(i, 100, 1000 + i as u64 * 1000));
+        }
+        // Bump the LRU candidate (index 0, oldest) so a different one is LRU.
+        assert!(mon.check_security_counter(0, 101, 1_000_000));
+        // Adding a new device evicts the *least recently used* (now index 1).
+        assert!(mon.check_security_counter(0xFFFE, 100, 2_000_000));
+        // The previously-evicted address can re-allocate a fresh window
+        // starting from a low counter (no global floor leaks across devices).
+        assert!(mon.check_security_counter(1, 1, 3_000_000));
+        // The not-evicted address still rejects its own replay.
+        assert!(!mon.check_security_counter(0, 101, 4_000_000));
     }
 
     #[test]
