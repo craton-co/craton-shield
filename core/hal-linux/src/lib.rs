@@ -24,7 +24,7 @@ pub use ethernet::LinuxEthernetPhy;
 #[cfg(target_os = "linux")]
 pub use timer::LinuxTimer;
 
-/// Convert a negative libc return value (with `errno` set) into a [`VsError`].
+/// Convert a negative libc return value (with `errno` set) into a [`vs_types::VsError`].
 #[cfg(target_os = "linux")]
 fn errno_to_vserror() -> vs_types::VsError {
     // SAFETY: reading errno via the thread-local __errno_location pointer.
