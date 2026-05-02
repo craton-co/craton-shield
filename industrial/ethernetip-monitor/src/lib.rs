@@ -339,32 +339,32 @@ impl EtherNetIpMonitor {
 
         // CIP service filter: parse the embedded MR service code from
         // SendRRData / SendUnitData encapsulation commands and check it
-        // against the configured bitmask. Service codes 0..=63 are
-        // filterable; higher codes bypass the filter (mask is u64).
+        // against the configured bitmask. CIP service codes are 7-bit
+        // (0x00–0x7F after masking the response bit), and the u128 mask
+        // covers all 128 possible codes — any code not set in the mask
+        // is blocked.
         if self.cip_service_mask != 0
             && (frame.command == SEND_RR_DATA || frame.command == SEND_UNIT_DATA)
         {
             let payload = &frame.payload[..frame.valid_payload_len()];
             if let Some(service) = parse_cip_service(payload) {
-                // CIP service codes are 7-bit (0x00–0x7F). The u128 mask
-                // covers all 128 possible codes; any code not set in the mask
-                // is blocked. Codes ≥ 128 are impossible after `& 0x7F` but
-                // are allowed defensively to avoid a spurious deny.
-                if service < 64 {
-                    let bit = 1u128 << service;
-                    if (self.cip_service_mask & bit) == 0 {
-                        result.allowed = false;
-                        result.push_alert_with_code(
-                            AlertSeverity::High,
-                            SOURCE_ETHERNETIP,
-                            frame.session_handle,
-                            frame.timestamp_us,
-                            &mut self.next_alert_id,
-                            &mut self.total_alerts,
-                            AlertCode::CipServiceBlocked,
-                        );
-                        return result;
-                    }
+                // `parse_cip_service` already masks the response bit, so
+                // `service` is guaranteed to be in 0..=127 and the shift
+                // below cannot overflow the u128 mask.
+                debug_assert!(service < 128);
+                let bit = 1u128 << service;
+                if (self.cip_service_mask & bit) == 0 {
+                    result.allowed = false;
+                    result.push_alert_with_code(
+                        AlertSeverity::High,
+                        SOURCE_ETHERNETIP,
+                        frame.session_handle,
+                        frame.timestamp_us,
+                        &mut self.next_alert_id,
+                        &mut self.total_alerts,
+                        AlertCode::CipServiceBlocked,
+                    );
+                    return result;
                 }
             }
         }
@@ -1037,13 +1037,17 @@ mod tests {
     }
 
     #[test]
-    fn cip_filter_service_above_63_bypasses_filter() {
+    fn cip_filter_service_above_63_is_filtered() {
+        // Regression: previously a `service < 64` guard limited the bitset
+        // to a u64 range, silently bypassing services 64..=127 (e.g.
+        // ReadTag = 0x4C). With the u128 mask the full 7-bit code space
+        // is filterable.
         let mut mon = EtherNetIpMonitor::new();
         mon.add_command_rule(0, 0).unwrap();
-        // Only allow service 0x0E; 0x4C=76 is outside the 64-bit mask range.
+        // Only allow service 0x0E (Get_Attribute_Single).
         mon.set_cip_service_filter(1u128 << 0x0E);
 
-        // Service 0x4C (76, read-tag) is outside the 64-bit mask range — bypasses.
+        // Service 0x4C (76, ReadTag) is NOT in the mask and must be blocked.
         let payload = cip_payload_unconnected(0x4C, &[]);
         let f = EtherNetIpFrame {
             command: SEND_RR_DATA,
@@ -1052,17 +1056,25 @@ mod tests {
             payload_len: 17,
             ..Default::default()
         };
-        assert!(mon.inspect(&f).allowed);
+        let r = mon.inspect(&f);
+        assert!(
+            !r.allowed,
+            "service 0x4C must be blocked by the u128 mask (was silently bypassed before)"
+        );
+        assert_eq!(r.alert_codes[0], AlertCode::CipServiceBlocked);
     }
 
     #[test]
-    fn cip_filter_service_0x3f_is_filterable() {
+    fn cip_filter_service_0x7f_is_filterable() {
+        // 0x7F is the highest 7-bit CIP service code (after stripping the
+        // response bit). It must be representable in the u128 mask.
         let mut mon = EtherNetIpMonitor::new();
         mon.add_command_rule(0, 0).unwrap();
-        // Service 0x3F (63) is the highest filterable code; only allow 0x0E.
-        mon.set_cip_service_filter(1u128 << 0x0E);
+        // Allow only service 0x7F.
+        mon.set_cip_service_filter(1u128 << 0x7F);
 
-        let payload = cip_payload_unconnected(0x3F, &[]);
+        // 0x7F is allowed.
+        let payload = cip_payload_unconnected(0x7F, &[]);
         let f = EtherNetIpFrame {
             command: SEND_RR_DATA,
             session_handle: 1,
@@ -1071,9 +1083,64 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            !mon.inspect(&f).allowed,
-            "service 0x3F must be filtered by u64 mask"
+            mon.inspect(&f).allowed,
+            "service 0x7F must be allowed when its bit is set"
         );
+
+        // 0x3F (63, the old high-water mark) is NOT in the mask and must be blocked.
+        let payload = cip_payload_unconnected(0x3F, &[]);
+        let f = EtherNetIpFrame {
+            command: SEND_RR_DATA,
+            session_handle: 2,
+            payload,
+            payload_len: 17,
+            ..Default::default()
+        };
+        assert!(
+            !mon.inspect(&f).allowed,
+            "service 0x3F must be filtered when not set in the u128 mask"
+        );
+    }
+
+    #[test]
+    fn cip_filter_full_range_64_to_127_is_filterable() {
+        // Sweep services 64..=127: with only bit `s` set in the mask, exactly
+        // service `s` should be allowed and any other service in the range
+        // should be blocked. This is the latent bug the u64→u128 fix closes.
+        for allowed_service in [0x40u8, 0x4C, 0x50, 0x60, 0x70, 0x7E, 0x7F] {
+            let mut mon = EtherNetIpMonitor::new();
+            mon.add_command_rule(0, 0).unwrap();
+            mon.set_cip_service_filter(1u128 << allowed_service);
+
+            // Allowed service passes.
+            let payload = cip_payload_unconnected(allowed_service, &[]);
+            let f = EtherNetIpFrame {
+                command: SEND_RR_DATA,
+                session_handle: 1,
+                payload,
+                payload_len: 17,
+                ..Default::default()
+            };
+            assert!(
+                mon.inspect(&f).allowed,
+                "service {allowed_service:#04x} must be allowed when its bit is set"
+            );
+
+            // A different service in the same upper half is blocked.
+            let blocked = if allowed_service == 0x40 { 0x41 } else { 0x40 };
+            let payload = cip_payload_unconnected(blocked, &[]);
+            let f = EtherNetIpFrame {
+                command: SEND_RR_DATA,
+                session_handle: 2,
+                payload,
+                payload_len: 17,
+                ..Default::default()
+            };
+            assert!(
+                !mon.inspect(&f).allowed,
+                "service {blocked:#04x} must be blocked when only {allowed_service:#04x} is set"
+            );
+        }
     }
 
     // -------------------------------------------------------------------
@@ -1274,18 +1341,19 @@ mod tests {
 
     #[test]
     fn vuln02_cip_service_code_above_63_can_be_blocked() {
-        // Ensure that a service code < 64 is blocked when not in the mask.
-        // Service codes >= 64 bypass the filter (only 0..=63 are filterable).
+        // Service codes >= 64 must now be blockable. With the previous u64
+        // mask + `service < 64` guard, ReadTag (0x4C = 76) was silently
+        // bypassed regardless of mask configuration.
         let mut mon = EtherNetIpMonitor::new();
         mon.add_command_rule(0x006F, 0).unwrap();
-        // Allow only Get_Attribute_Single (0x0E); service 0x10 is NOT set.
+        // Allow only Get_Attribute_Single (0x0E); ReadTag (0x4C) is NOT set.
         mon.set_cip_service_filter(1u128 << 0x0E);
 
         let mut frame = EtherNetIpFrame::default();
         frame.session_handle = 1;
         frame.command = 0x006F;
         frame.payload_len = 20;
-        let payload = make_payload_for_service(0x10);
+        let payload = make_payload_for_service(0x4C);
         frame.payload[..20].copy_from_slice(&payload);
         frame.timestamp_us = 1000;
 
@@ -1297,8 +1365,9 @@ mod tests {
         let result = mon.inspect(&frame);
         assert!(
             !result.allowed,
-            "service 0x10 must be blocked when bit 0x10 is not in the mask"
+            "service 0x4C (>= 64) must be blocked when bit 0x4C is not in the u128 mask"
         );
+        assert_eq!(result.alert_codes[0], AlertCode::CipServiceBlocked);
     }
 
     // -------------------------------------------------------------------

@@ -52,12 +52,10 @@ echo ""
 docker run --rm -it \
     -e RUST_BACKTRACE=1 \
     -e CARGO_TERM_COLOR=always \
-    -e CARGO_HOME=/usr/local/cargo \
-    -e RUSTUP_HOME=/usr/local/rustup \
     -v "${REPO_ROOT}:/work" \
     -v "${HOST_CARGO_HOME}/registry:/usr/local/cargo/registry" \
     -v "${HOST_CARGO_HOME}/git:/usr/local/cargo/git" \
     -v "${REPO_ROOT}/target:/work/target" \
     -w /work \
     "${DOCKER_IMAGE}" \
-    bash -lc 'export PATH=/usr/local/cargo/bin:$PATH; ./scripts/local-ci.sh "$@"' _ "$@"
+    bash -lc './scripts/local-ci.sh "$@"' _ "$@"
