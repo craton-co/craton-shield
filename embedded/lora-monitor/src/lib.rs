@@ -86,6 +86,16 @@ const MAX_DUTY_TRACKERS: usize = 16;
 /// indicates a replay attack rather than legitimate retransmission.
 const MAX_DUP_PER_COUNTER: u8 = 3;
 
+/// Maximum forward jump (in counters) accepted on a single advance.
+///
+/// LoRaWAN frame counters are 32-bit. A jump beyond this window is treated as
+/// a suspicious-jump replay attempt. 2^15 = 32768 leaves generous headroom
+/// for legitimate frame loss while bounding what an attacker can pre-empt.
+const ACCEPT_FORWARD_WINDOW: u32 = 1 << 15;
+
+/// Top-of-range threshold above which a 0xFFFFFFFF -> 0 rollover is plausible.
+const ROLLOVER_TOP_THRESHOLD: u32 = 0xFFFF_0000;
+
 // ---------------------------------------------------------------------------
 // Alert source ID constants
 // ---------------------------------------------------------------------------
@@ -270,9 +280,20 @@ pub struct LoraMonitor {
     /// Per-session duplicate frame counter for downlink replay detection.
     /// Tracks how many times the same downlink frame counter has been seen.
     down_dup_counts: [u8; MAX_TRACKED_DEVICES],
-    /// Floor for frame counters, derived from evicted sessions.
-    /// Prevents replay of old frames after session table eviction.
-    min_frame_counter_floor: u32,
+    /// Per-session 64-bit replay bitmap for uplink frame counters.
+    ///
+    /// Bit `b` of `up_recent_bitmap[i]` is set when uplink counter
+    /// `sessions[i].up_frame_counter - 1 - b` has been observed, giving each
+    /// device an independent 64-counter window. Replaces the old global
+    /// `min_frame_counter_floor` so one device's eviction does not lock
+    /// out another device.
+    up_recent_bitmap: [u64; MAX_TRACKED_DEVICES],
+    /// Per-session 64-bit replay bitmap for downlink frame counters.
+    down_recent_bitmap: [u64; MAX_TRACKED_DEVICES],
+    /// Whether 32-bit counter rollover is allowed for honest devices that
+    /// wrap 0xFFFFFFFF -> 0. Rollover is only accepted when the tracked
+    /// counter is in the top of the range (`>= ROLLOVER_TOP_THRESHOLD`).
+    allow_counter_rollover: bool,
 }
 
 impl LoraMonitor {
@@ -301,8 +322,19 @@ impl LoraMonitor {
             duty_table_exhaustions: 0,
             up_dup_counts: [0u8; MAX_TRACKED_DEVICES],
             down_dup_counts: [0u8; MAX_TRACKED_DEVICES],
-            min_frame_counter_floor: 0,
+            up_recent_bitmap: [0u64; MAX_TRACKED_DEVICES],
+            down_recent_bitmap: [0u64; MAX_TRACKED_DEVICES],
+            allow_counter_rollover: false,
         }
+    }
+
+    /// Enable or disable acceptance of 32-bit frame-counter rollover.
+    ///
+    /// When enabled, a counter that wraps from `0xFFFFFFFF` to `0` (or
+    /// thereabouts) is accepted only if the previously seen counter was in
+    /// the top of the range (>= `0xFFFF0000`). Disabled by default.
+    pub fn set_allow_counter_rollover(&mut self, allow: bool) {
+        self.allow_counter_rollover = allow;
     }
 
     /// Create a new `LoRa` monitor (deny-by-default).
@@ -371,6 +403,10 @@ impl LoraMonitor {
         for i in 0..MAX_TRACKED_DEVICES {
             if self.sessions[i].active && ct_addr4_eq(&self.sessions[i].dev_addr, &dev_addr) {
                 self.sessions[i] = LoraSession::empty();
+                self.up_recent_bitmap[i] = 0;
+                self.down_recent_bitmap[i] = 0;
+                self.up_dup_counts[i] = 0;
+                self.down_dup_counts[i] = 0;
                 return;
             }
         }
@@ -388,6 +424,10 @@ impl LoraMonitor {
                 self.sessions[i].up_frame_counter = u32::MAX;
                 self.sessions[i].down_frame_counter = u32::MAX;
                 self.sessions[i].session_id = new_session_id;
+                self.up_recent_bitmap[i] = 0;
+                self.down_recent_bitmap[i] = 0;
+                self.up_dup_counts[i] = 0;
+                self.down_dup_counts[i] = 0;
                 return Ok(());
             }
         }
@@ -402,6 +442,10 @@ impl LoraMonitor {
                     last_activity_us: 0,
                     active: true,
                 };
+                self.up_recent_bitmap[i] = 0;
+                self.down_recent_bitmap[i] = 0;
+                self.up_dup_counts[i] = 0;
+                self.down_dup_counts[i] = 0;
                 return Ok(());
             }
         }
@@ -830,6 +874,11 @@ impl LoraMonitor {
 
     /// Check for uplink replay attack. Returns `true` if replay detected,
     /// `false` if valid.
+    ///
+    /// Maintains a per-session sliding window
+    /// `(up_frame_counter, up_recent_bitmap)` of size 64 keyed by `dev_addr`.
+    /// Each device has independent state, so an evicted device's history
+    /// cannot lock out another device.
     fn check_replay(&mut self, dev_addr: [u8; 4], frame_counter: u32, ts_us: u64) -> bool {
         // Single pass: find existing session, free slot, and LRU candidate.
         let mut free_slot: Option<usize> = None;
@@ -838,31 +887,14 @@ impl LoraMonitor {
         for i in 0..MAX_TRACKED_DEVICES {
             if self.sessions[i].active {
                 if ct_addr4_eq(&self.sessions[i].dev_addr, &dev_addr) {
-                    // Sentinel: u32::MAX means fresh session, accept any counter.
-                    if self.sessions[i].up_frame_counter == u32::MAX {
-                        self.sessions[i].up_frame_counter = frame_counter;
-                        self.sessions[i].last_activity_us = ts_us;
-                        return false;
-                    }
-                    // Reject frames below the global floor set by evicted sessions.
-                    if frame_counter < self.min_frame_counter_floor {
-                        return true; // replay: below eviction floor
-                    }
-                    if frame_counter < self.sessions[i].up_frame_counter {
-                        return true; // replay: counter regression
-                    }
-                    if frame_counter == self.sessions[i].up_frame_counter {
-                        self.up_dup_counts[i] = self.up_dup_counts[i].saturating_add(1);
-                        if self.up_dup_counts[i] > MAX_DUP_PER_COUNTER {
-                            return true; // excessive duplicates = replay attack
-                        }
-                        return false; // allow limited retransmissions
-                    }
-                    // Counter advanced normally - reset duplicate tracking.
-                    self.up_dup_counts[i] = 0;
-                    self.sessions[i].up_frame_counter = frame_counter;
-                    self.sessions[i].last_activity_us = ts_us;
-                    return false;
+                    return Self::accept_uplink(
+                        &mut self.sessions[i],
+                        &mut self.up_recent_bitmap[i],
+                        &mut self.up_dup_counts[i],
+                        frame_counter,
+                        ts_us,
+                        self.allow_counter_rollover,
+                    );
                 }
                 if self.sessions[i].last_activity_us < lru_ts {
                     lru_ts = self.sessions[i].last_activity_us;
@@ -876,6 +908,8 @@ impl LoraMonitor {
         if let Some(idx) = free_slot {
             self.up_dup_counts[idx] = 0;
             self.down_dup_counts[idx] = 0;
+            self.up_recent_bitmap[idx] = 0;
+            self.down_recent_bitmap[idx] = 0;
             self.sessions[idx] = LoraSession {
                 dev_addr,
                 up_frame_counter: frame_counter,
@@ -887,25 +921,106 @@ impl LoraMonitor {
             };
             return false;
         }
-        // No free slot — LRU eviction using candidate from single pass.
+        // No free slot -- LRU eviction. Per-device windows are independent
+        // so the evicted session's counter is NOT carried forward as a
+        // global floor; the new device starts fresh.
         self.table_exhaustion_count = self.table_exhaustion_count.saturating_add(1);
         self.table_exhaustion_last_source = ALERT_SESSION_TABLE_EXHAUSTED;
         self.session_table_exhaustions = self.session_table_exhaustions.saturating_add(1);
-        // Use the evicted session's uplink counter as a floor to prevent
-        // replays of frames from the evicted session.
-        self.min_frame_counter_floor = self
-            .min_frame_counter_floor
-            .max(self.sessions[lru_idx].up_frame_counter);
         self.up_dup_counts[lru_idx] = 0;
         self.down_dup_counts[lru_idx] = 0;
+        self.up_recent_bitmap[lru_idx] = 0;
+        self.down_recent_bitmap[lru_idx] = 0;
         self.sessions[lru_idx] = LoraSession {
             dev_addr,
             up_frame_counter: frame_counter,
-            down_frame_counter: 1,
+            // Fresh slot: downlink starts fresh too (sentinel u32::MAX).
+            down_frame_counter: u32::MAX,
             session_id: 1,
             last_activity_us: ts_us,
             active: true,
         };
+        false
+    }
+
+    /// Apply per-device uplink window rules.
+    ///
+    /// Returns `true` if the frame is a replay (and must be rejected),
+    /// `false` if it should be accepted (and the session state has been
+    /// updated in place).
+    fn accept_uplink(
+        session: &mut LoraSession,
+        bitmap: &mut u64,
+        dup_count: &mut u8,
+        frame_counter: u32,
+        ts_us: u64,
+        allow_rollover: bool,
+    ) -> bool {
+        // Sentinel: u32::MAX means fresh session, accept any counter.
+        if session.up_frame_counter == u32::MAX {
+            session.up_frame_counter = frame_counter;
+            session.last_activity_us = ts_us;
+            *bitmap = 0;
+            *dup_count = 0;
+            return false; // not a replay
+        }
+
+        let highest = session.up_frame_counter;
+
+        if frame_counter > highest {
+            let advance = frame_counter - highest;
+            if advance > ACCEPT_FORWARD_WINDOW {
+                return true; // suspicious forward jump
+            }
+            let shift = advance.min(64);
+            let new_bitmap = if shift >= 64 {
+                0u64
+            } else {
+                (*bitmap << shift) | (1u64 << (advance - 1))
+            };
+            *bitmap = new_bitmap;
+            session.up_frame_counter = frame_counter;
+            session.last_activity_us = ts_us;
+            *dup_count = 0;
+            return false;
+        }
+
+        if frame_counter == highest {
+            // LoRaWAN confirmed uplinks legitimately reuse the same counter
+            // for retransmissions, so allow a bounded number before flagging.
+            *dup_count = dup_count.saturating_add(1);
+            if *dup_count > MAX_DUP_PER_COUNTER {
+                return true;
+            }
+            session.last_activity_us = ts_us;
+            return false;
+        }
+
+        // frame_counter < highest
+        let diff = highest - frame_counter;
+
+        // Detect plausible 32-bit rollover.
+        if allow_rollover
+            && highest >= ROLLOVER_TOP_THRESHOLD
+            && frame_counter < ACCEPT_FORWARD_WINDOW
+        {
+            session.up_frame_counter = frame_counter;
+            session.last_activity_us = ts_us;
+            *bitmap = 0;
+            *dup_count = 0;
+            return false;
+        }
+
+        if diff > 64 {
+            return true; // out-of-window stale frame
+        }
+        let bit = diff - 1;
+        let mask = 1u64 << bit;
+        if *bitmap & mask != 0 {
+            return true; // already-seen replay
+        }
+        *bitmap |= mask;
+        session.last_activity_us = ts_us;
         false
     }
 
@@ -918,26 +1033,14 @@ impl LoraMonitor {
         for i in 0..MAX_TRACKED_DEVICES {
             if self.sessions[i].active {
                 if ct_addr4_eq(&self.sessions[i].dev_addr, &dev_addr) {
-                    if self.sessions[i].down_frame_counter == u32::MAX {
-                        self.sessions[i].down_frame_counter = frame_counter;
-                        self.sessions[i].last_activity_us = ts_us;
-                        return false;
-                    }
-                    if frame_counter < self.sessions[i].down_frame_counter {
-                        return true; // replay: counter regression
-                    }
-                    if frame_counter == self.sessions[i].down_frame_counter {
-                        self.down_dup_counts[i] = self.down_dup_counts[i].saturating_add(1);
-                        if self.down_dup_counts[i] > MAX_DUP_PER_COUNTER {
-                            return true; // excessive duplicates = replay attack
-                        }
-                        return false; // allow limited retransmissions
-                    }
-                    // Counter advanced normally - reset duplicate tracking.
-                    self.down_dup_counts[i] = 0;
-                    self.sessions[i].down_frame_counter = frame_counter;
-                    self.sessions[i].last_activity_us = ts_us;
-                    return false;
+                    return Self::accept_downlink(
+                        &mut self.sessions[i],
+                        &mut self.down_recent_bitmap[i],
+                        &mut self.down_dup_counts[i],
+                        frame_counter,
+                        ts_us,
+                        self.allow_counter_rollover,
+                    );
                 }
                 if self.sessions[i].last_activity_us < lru_ts {
                     lru_ts = self.sessions[i].last_activity_us;
@@ -951,6 +1054,8 @@ impl LoraMonitor {
         if let Some(idx) = free_slot {
             self.up_dup_counts[idx] = 0;
             self.down_dup_counts[idx] = 0;
+            self.up_recent_bitmap[idx] = 0;
+            self.down_recent_bitmap[idx] = 0;
             self.sessions[idx] = LoraSession {
                 dev_addr,
                 // Sentinel: accept any first uplink counter for this session.
@@ -962,25 +1067,97 @@ impl LoraMonitor {
             };
             return false;
         }
-        // No free slot — LRU eviction using candidate from single pass.
+        // No free slot -- LRU eviction. Per-device windows are independent;
+        // no global floor is propagated.
         self.table_exhaustion_count = self.table_exhaustion_count.saturating_add(1);
         self.table_exhaustion_last_source = ALERT_SESSION_TABLE_EXHAUSTED;
         self.session_table_exhaustions = self.session_table_exhaustions.saturating_add(1);
-        // Use the evicted session's uplink counter as a floor to prevent
-        // replays of frames from the evicted session.
-        self.min_frame_counter_floor = self
-            .min_frame_counter_floor
-            .max(self.sessions[lru_idx].up_frame_counter);
         self.up_dup_counts[lru_idx] = 0;
         self.down_dup_counts[lru_idx] = 0;
+        self.up_recent_bitmap[lru_idx] = 0;
+        self.down_recent_bitmap[lru_idx] = 0;
         self.sessions[lru_idx] = LoraSession {
             dev_addr,
-            up_frame_counter: 1,
+            // Fresh slot: uplink starts fresh too (sentinel u32::MAX).
+            up_frame_counter: u32::MAX,
             down_frame_counter: frame_counter,
             session_id: 1,
             last_activity_us: ts_us,
             active: true,
         };
+        false
+    }
+
+    /// Apply per-device downlink window rules. Symmetrical to
+    /// [`accept_uplink`](Self::accept_uplink).
+    fn accept_downlink(
+        session: &mut LoraSession,
+        bitmap: &mut u64,
+        dup_count: &mut u8,
+        frame_counter: u32,
+        ts_us: u64,
+        allow_rollover: bool,
+    ) -> bool {
+        if session.down_frame_counter == u32::MAX {
+            session.down_frame_counter = frame_counter;
+            session.last_activity_us = ts_us;
+            *bitmap = 0;
+            *dup_count = 0;
+            return false;
+        }
+
+        let highest = session.down_frame_counter;
+
+        if frame_counter > highest {
+            let advance = frame_counter - highest;
+            if advance > ACCEPT_FORWARD_WINDOW {
+                return true;
+            }
+            let shift = advance.min(64);
+            let new_bitmap = if shift >= 64 {
+                0u64
+            } else {
+                (*bitmap << shift) | (1u64 << (advance - 1))
+            };
+            *bitmap = new_bitmap;
+            session.down_frame_counter = frame_counter;
+            session.last_activity_us = ts_us;
+            *dup_count = 0;
+            return false;
+        }
+
+        if frame_counter == highest {
+            *dup_count = dup_count.saturating_add(1);
+            if *dup_count > MAX_DUP_PER_COUNTER {
+                return true;
+            }
+            session.last_activity_us = ts_us;
+            return false;
+        }
+
+        let diff = highest - frame_counter;
+
+        if allow_rollover
+            && highest >= ROLLOVER_TOP_THRESHOLD
+            && frame_counter < ACCEPT_FORWARD_WINDOW
+        {
+            session.down_frame_counter = frame_counter;
+            session.last_activity_us = ts_us;
+            *bitmap = 0;
+            *dup_count = 0;
+            return false;
+        }
+
+        if diff > 64 {
+            return true;
+        }
+        let bit = diff - 1;
+        let mask = 1u64 << bit;
+        if *bitmap & mask != 0 {
+            return true;
+        }
+        *bitmap |= mask;
+        session.last_activity_us = ts_us;
         false
     }
 
@@ -1065,8 +1242,9 @@ impl MonitorReset for LoraMonitor {
         // Reset duplicate counters.
         self.up_dup_counts = [0u8; MAX_TRACKED_DEVICES];
         self.down_dup_counts = [0u8; MAX_TRACKED_DEVICES];
-        // Reset eviction floor.
-        self.min_frame_counter_floor = 0;
+        // Reset per-session replay bitmaps.
+        self.up_recent_bitmap = [0u64; MAX_TRACKED_DEVICES];
+        self.down_recent_bitmap = [0u64; MAX_TRACKED_DEVICES];
         // NOTE: rules, rule_count, default_action, join_flood_threshold,
         // and join_flood_window_us are preserved.
     }
@@ -1592,7 +1770,9 @@ mod tests {
         let mut mon = LoraMonitor::new();
         let addr = [0x01; 4];
         let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 10, 1000));
-        // Counter 9 < 10 is a replay (equal counter is allowed for retransmissions)
+        // Counter 9 < 10 within the 64-counter window is now an out-of-order
+        // delivery (acceptable, marks the bit). Replaying it is a replay.
+        let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 9, 1500));
         let r = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 9, 2000));
         assert_eq!(r.alerts[0].source_id, ALERT_REPLAY_DETECTED);
     }
@@ -1744,8 +1924,10 @@ mod tests {
         let msg = make_msg(new_addr, LoraMessageType::UnconfirmedUp, 10, 100_000_000);
         let _ = mon.inspect(&msg);
 
-        // After LRU eviction, down_frame_counter starts at 1 (not 0) to catch
-        // trivial counter=0 replays. Counter 1 should be accepted.
+        // With per-device windows the new session starts fresh: the first
+        // downlink counter (sentinel u32::MAX -> any value) is accepted.
+        // This is correct because per-device windows are independent of
+        // any evicted device's history.
         let down = make_msg(new_addr, LoraMessageType::UnconfirmedDown, 1, 200_000_000);
         let r = mon.inspect_downlink(&down);
         assert!(
@@ -1753,12 +1935,20 @@ mod tests {
             "downlink counter 1 after LRU eviction must be accepted"
         );
 
-        // Counter 0 should be rejected (replay of trivial counter=0).
+        // Counter 0 < 1 with diff=1 is in-window and unseen, so accepted.
         let down0 = make_msg(new_addr, LoraMessageType::UnconfirmedDown, 0, 300_000_000);
         let r0 = mon.inspect_downlink(&down0);
         assert!(
-            !r0.allowed,
-            "downlink counter 0 after LRU eviction must be flagged as replay"
+            r0.allowed,
+            "downlink counter 0 in-window after LRU eviction is acceptable out-of-order"
+        );
+        // Replaying counter 0 (whose bit is now set) must be rejected as a
+        // replay; this exercises the per-device bitmap.
+        let down0_again = make_msg(new_addr, LoraMessageType::UnconfirmedDown, 0, 400_000_000);
+        let r0_again = mon.inspect_downlink(&down0_again);
+        assert!(
+            !r0_again.allowed,
+            "second downlink counter 0 must be rejected as replay"
         );
     }
 
@@ -1804,5 +1994,166 @@ mod tests {
         assert_eq!(monitor.session_table_exhaustions(), 0);
         assert_eq!(monitor.adr_table_exhaustions(), 0);
         assert_eq!(monitor.duty_table_exhaustions(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-device frame-counter window tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn per_device_window_in_order_accept() {
+        let mut mon = LoraMonitor::new();
+        let addr = [0xA0; 4];
+        for c in [1u32, 2, 3, 100, 1000] {
+            let m = make_msg(addr, LoraMessageType::UnconfirmedUp, c, 1000 + c as u64);
+            assert!(mon.inspect(&m).allowed, "in-order counter {} should accept", c);
+        }
+    }
+
+    #[test]
+    fn per_device_window_replay_within_window_rejected() {
+        let mut mon = LoraMonitor::new();
+        let addr = [0xA1; 4];
+        // Establish counter 100 then advance to 110.
+        let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 100, 1000));
+        let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 110, 2000));
+        // Out-of-order delivery of 105 (in-window, unseen) is accepted.
+        assert!(mon
+            .inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 105, 3000))
+            .allowed);
+        // Replay of 105 must be rejected.
+        let r = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 105, 4000));
+        assert!(!r.allowed, "replay within window must be rejected");
+    }
+
+    #[test]
+    fn per_device_window_old_frame_below_window_rejected() {
+        let mut mon = LoraMonitor::new();
+        let addr = [0xA2; 4];
+        let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 200, 1000));
+        // diff=64 boundary still in window.
+        assert!(mon
+            .inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 200 - 64, 2000))
+            .allowed);
+        // diff=65 is below the window.
+        let r = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 200 - 65, 3000));
+        assert!(!r.allowed, "frame below 64-counter window must be rejected");
+    }
+
+    #[test]
+    fn per_device_window_forward_jump_within_window_accepts() {
+        let mut mon = LoraMonitor::new();
+        let addr = [0xA3; 4];
+        let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 100, 1000));
+        let r = mon.inspect(&make_msg(
+            addr,
+            LoraMessageType::UnconfirmedUp,
+            100 + ACCEPT_FORWARD_WINDOW,
+            2000,
+        ));
+        assert!(r.allowed, "forward jump within accept window must accept");
+    }
+
+    #[test]
+    fn per_device_window_forward_jump_beyond_window_rejected() {
+        let mut mon = LoraMonitor::new();
+        let addr = [0xA4; 4];
+        let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 100, 1000));
+        let r = mon.inspect(&make_msg(
+            addr,
+            LoraMessageType::UnconfirmedUp,
+            100 + ACCEPT_FORWARD_WINDOW + 1,
+            2000,
+        ));
+        assert!(!r.allowed, "forward jump beyond window must be rejected");
+    }
+
+    #[test]
+    fn per_device_window_rollover_when_enabled_accepts() {
+        let mut mon = LoraMonitor::new();
+        mon.set_allow_counter_rollover(true);
+        let addr = [0xA5; 4];
+        // Seed at top of u32 range so rollover is plausible.
+        let _ = mon.inspect(&make_msg(
+            addr,
+            LoraMessageType::UnconfirmedUp,
+            0xFFFF_FFF0,
+            1000,
+        ));
+        let r = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 0, 2000));
+        assert!(r.allowed, "honest rollover must be accepted when enabled");
+    }
+
+    #[test]
+    fn per_device_window_rollover_when_disabled_rejects() {
+        let mut mon = LoraMonitor::new();
+        // Default: rollover disabled.
+        let addr = [0xA6; 4];
+        let _ = mon.inspect(&make_msg(
+            addr,
+            LoraMessageType::UnconfirmedUp,
+            0xFFFF_FFF0,
+            1000,
+        ));
+        let r = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 0, 2000));
+        assert!(!r.allowed, "rollover with disabled config must be rejected");
+    }
+
+    #[test]
+    fn per_device_window_lru_eviction_works() {
+        // Verify LRU eviction does not propagate the evicted device's counter
+        // as a global floor: a freshly admitted device must accept any
+        // starting counter independently of evicted state.
+        let mut mon = LoraMonitor::new();
+        // Fill all session slots, all with high counters.
+        for i in 0..MAX_TRACKED_DEVICES as u32 {
+            let addr = [0x11, 0x22, (i >> 8) as u8, i as u8];
+            let m = make_msg(
+                addr,
+                LoraMessageType::UnconfirmedUp,
+                1_000_000,
+                (i as u64 + 1) * 1_000_000,
+            );
+            let _ = mon.inspect(&m);
+        }
+        // Admit a 17th device which forces LRU eviction.
+        let new_addr = [0xDE, 0xAD, 0xBE, 0xEF];
+        let m_evict = make_msg(new_addr, LoraMessageType::UnconfirmedUp, 5, 100_000_000);
+        let r_evict = mon.inspect(&m_evict);
+        assert!(
+            r_evict.allowed,
+            "new device after eviction must accept its own counter (no global floor)"
+        );
+        // Continue from the new device's counter.
+        assert!(mon
+            .inspect(&make_msg(new_addr, LoraMessageType::UnconfirmedUp, 6, 200_000_000))
+            .allowed);
+        // Replay of 5 on the new device is rejected.
+        assert!(!mon
+            .inspect(&make_msg(new_addr, LoraMessageType::UnconfirmedUp, 5, 300_000_000))
+            .allowed);
+    }
+
+    #[test]
+    fn per_device_window_isolated_across_devices() {
+        // Ensure two devices' windows are independent.
+        let mut mon = LoraMonitor::new();
+        let a = [0xB0; 4];
+        let b = [0xB1; 4];
+        // Device A advances to a high counter.
+        assert!(mon
+            .inspect(&make_msg(a, LoraMessageType::UnconfirmedUp, 1_000_000, 1000))
+            .allowed);
+        // Device B can still legitimately start at 1.
+        assert!(mon
+            .inspect(&make_msg(b, LoraMessageType::UnconfirmedUp, 1, 2000))
+            .allowed);
+        assert!(mon
+            .inspect(&make_msg(b, LoraMessageType::UnconfirmedUp, 2, 3000))
+            .allowed);
+        // Device A still rejects its own old counter (out of window).
+        assert!(!mon
+            .inspect(&make_msg(a, LoraMessageType::UnconfirmedUp, 1, 4000))
+            .allowed);
     }
 }
