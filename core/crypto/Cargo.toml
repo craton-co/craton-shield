@@ -27,7 +27,7 @@ ecdsa = { version = "0.16", default-features = false, features = ["signing", "ve
 
 # Post-quantum cryptography crates (FIPS 203 / FIPS 204).
 ml-kem = { version = "0.2", default-features = false, optional = true }
-ml-dsa = { version = "0.1.0-rc.3", default-features = false, optional = true }
+ml-dsa = { version = "0.1.0-rc.9", default-features = false, optional = true }
 rand_core = { version = "0.6", default-features = false, optional = true }
 
 [features]
