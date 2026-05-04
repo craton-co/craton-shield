@@ -103,6 +103,257 @@ const ALERT_RATE_BUCKET_EXHAUSTED: u32 = 4;
 const ALERT_AMPLIFICATION: u32 = 5;
 const ALERT_TIMESTAMP_ANOMALY: u32 = 6;
 const ALERT_TRACKER_SATURATED: u32 = 7;
+const ALERT_URI_PATH_TRAVERSAL: u32 = 8;
+const ALERT_URI_NUL_BYTE: u32 = 9;
+const ALERT_URI_EMPTY_SEGMENT: u32 = 10;
+const ALERT_URI_OVERSIZED_SEGMENT: u32 = 11;
+
+// ---------------------------------------------------------------------------
+// URI normalization / validation
+// ---------------------------------------------------------------------------
+
+/// Default maximum length (in raw, pre-decode bytes) for any single Uri-Path
+/// or Uri-Query segment. RFC 7252 caps a single option value at 255 bytes,
+/// matching this default.
+pub const DEFAULT_MAX_SEGMENT_LEN: usize = 255;
+
+/// Configuration for the Uri-Path / Uri-Query normalization checks performed
+/// on every inspected `CoAP` frame.
+#[derive(Debug, Clone, Copy)]
+pub struct CoapValidationConfig {
+    /// Maximum length of any single Uri-Path or Uri-Query key segment, measured
+    /// in *raw* (pre percent-decode) bytes. Segments longer than this are
+    /// rejected with [`UriRejectReason::OversizedSegment`].
+    pub max_segment_len: usize,
+}
+
+impl CoapValidationConfig {
+    /// Construct a config with the default 255-byte segment cap.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            max_segment_len: DEFAULT_MAX_SEGMENT_LEN,
+        }
+    }
+
+    /// Override the per-segment maximum length.
+    #[must_use]
+    pub const fn with_max_segment_len(mut self, max_segment_len: usize) -> Self {
+        self.max_segment_len = max_segment_len;
+        self
+    }
+}
+
+impl Default for CoapValidationConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Reason a Uri-Path or Uri-Query key was rejected during normalization.
+///
+/// Surfaced on [`CoapInspectResult::reject_reason`] so a downstream policy
+/// engine can distinguish the failure mode without re-parsing the URI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UriRejectReason {
+    /// A path segment, after a single percent-decode pass, equals `..` or `.`.
+    /// Detection runs on the raw bytes too, so encoded forms such as `%2e%2e`,
+    /// `%2E%2E`, `%2e.`, and `.%2e` are caught even though the codepoints are
+    /// only decoded once.
+    PathTraversal,
+    /// A NUL (`0x00`) byte was found in a segment, either as a literal byte or
+    /// as a `%00` escape after a single decode pass. Downstream C-style
+    /// string handlers truncate at NUL, which would silently change the URI's
+    /// meaning.
+    NulByte,
+    /// An empty path segment (e.g. `//`, a trailing `/`, or a leading `/` with
+    /// nothing after it). RFC 7252 forbids zero-length Uri-Path option values.
+    EmptySegment,
+    /// A raw (pre-decode) segment exceeded
+    /// [`CoapValidationConfig::max_segment_len`].
+    OversizedSegment,
+}
+
+impl UriRejectReason {
+    /// Stable alert source ID for correlation with downstream SIEM tooling.
+    #[inline]
+    #[must_use]
+    pub const fn alert_source_id(self) -> u32 {
+        match self {
+            Self::PathTraversal => ALERT_URI_PATH_TRAVERSAL,
+            Self::NulByte => ALERT_URI_NUL_BYTE,
+            Self::EmptySegment => ALERT_URI_EMPTY_SEGMENT,
+            Self::OversizedSegment => ALERT_URI_OVERSIZED_SEGMENT,
+        }
+    }
+}
+
+/// Decode a single percent-encoded byte triple `%HH`.
+///
+/// Returns `Some((byte, 3))` on success, or `None` if the triple is malformed
+/// (truncated or non-hex). Callers treat malformed escapes as a literal `%`
+/// followed by the remaining bytes — they cannot magically become `..`, so we
+/// do not surface a dedicated rejection reason for them.
+#[inline]
+fn decode_percent_triple(bytes: &[u8]) -> Option<u8> {
+    if bytes.len() < 3 || bytes[0] != b'%' {
+        return None;
+    }
+    let hi = hex_nibble(bytes[1])?;
+    let lo = hex_nibble(bytes[2])?;
+    Some((hi << 4) | lo)
+}
+
+#[inline]
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Run a *single* percent-decode pass over `raw`, writing the result into `out`
+/// up to `out`'s capacity, and return the decoded length (or `None` if the
+/// decoded form would overflow `out`).
+///
+/// Why a single pass: the decoded output is what an application sees once. If
+/// we recursively decoded, we would interpret a literal `%2e%2e` segment that a
+/// client genuinely meant to send (which carries the bytes `%`, `2`, `e`, `%`,
+/// `2`, `e`) as `..`, breaking apps that legitimately use `%`-containing names.
+/// More importantly, attackers exploit double-decode bugs: any layer that
+/// re-decodes already-decoded output is itself the vulnerability. We decode
+/// exactly once and then compare the result; double-encoded inputs such as
+/// `%252e%252e` decode to the literal string `%2e%2e`, which is NOT `..` and
+/// is therefore allowed through this check (and would still be rejected by any
+/// upstream layer that already decoded once before handing us the bytes).
+fn percent_decode_once<const N: usize>(raw: &[u8], out: &mut [u8; N]) -> Option<usize> {
+    let mut i = 0usize;
+    let mut o = 0usize;
+    while i < raw.len() {
+        if raw[i] == b'%' {
+            if let Some(decoded) = decode_percent_triple(&raw[i..]) {
+                if o >= N {
+                    return None;
+                }
+                out[o] = decoded;
+                o += 1;
+                i += 3;
+                continue;
+            }
+        }
+        if o >= N {
+            return None;
+        }
+        out[o] = raw[i];
+        o += 1;
+        i += 1;
+    }
+    Some(o)
+}
+
+/// Validate a single raw Uri-Path or Uri-Query-key segment.
+///
+/// Performs, in order:
+/// 1. Length cap (raw bytes) — see [`UriRejectReason::OversizedSegment`].
+/// 2. Empty check — see [`UriRejectReason::EmptySegment`].
+/// 3. Literal NUL scan in the raw bytes.
+/// 4. *Single-pass* percent-decode, followed by:
+///    - NUL check on the decoded bytes (catches `%00`).
+///    - Equality check against `.` and `..` (catches `%2e%2e`, `%2E%2E`,
+///      `%2e.`, `.%2e`, and any other single-decode reach of a traversal token).
+///
+/// A segment exceeding the internal 256-byte decode buffer is rejected as
+/// `OversizedSegment` defensively; the public 255-byte default keeps us
+/// inside that buffer.
+pub fn validate_segment(raw: &[u8], cfg: &CoapValidationConfig) -> Result<(), UriRejectReason> {
+    if raw.is_empty() {
+        return Err(UriRejectReason::EmptySegment);
+    }
+    if raw.len() > cfg.max_segment_len {
+        return Err(UriRejectReason::OversizedSegment);
+    }
+    // Raw NUL byte check (defense-in-depth: would also be caught after decode).
+    for &b in raw {
+        if b == 0 {
+            return Err(UriRejectReason::NulByte);
+        }
+    }
+
+    // Single-pass percent decode into a fixed buffer.
+    let mut buf = [0u8; 256];
+    let Some(decoded_len) = percent_decode_once(raw, &mut buf) else {
+        return Err(UriRejectReason::OversizedSegment);
+    };
+    let decoded = &buf[..decoded_len];
+
+    // %00 in the raw form decodes to a NUL here.
+    for &b in decoded {
+        if b == 0 {
+            return Err(UriRejectReason::NulByte);
+        }
+    }
+
+    // Traversal: a segment that is exactly "." or ".." after one decode pass.
+    if decoded == b"." || decoded == b".." {
+        return Err(UriRejectReason::PathTraversal);
+    }
+
+    Ok(())
+}
+
+/// Validate an assembled Uri-Path (slash-delimited segments).
+///
+/// A leading `/` is permitted (and conventional in this codebase). Any other
+/// empty segment — including a trailing `/` or a doubled `//` — is rejected
+/// with [`UriRejectReason::EmptySegment`].
+pub fn validate_uri_path(
+    path: &[u8],
+    cfg: &CoapValidationConfig,
+) -> Result<(), UriRejectReason> {
+    if path.is_empty() {
+        // An empty Uri-Path is the root resource — RFC 7252 represents this as
+        // "no Uri-Path options at all", which is fine. Nothing to validate.
+        return Ok(());
+    }
+
+    // Skip exactly one leading slash (our assembled-URI convention). A bare
+    // "/" therefore yields no segments and validates trivially.
+    let body = if path[0] == b'/' { &path[1..] } else { path };
+
+    if body.is_empty() {
+        return Ok(());
+    }
+
+    // Reject a trailing slash — that creates an empty terminal segment.
+    if *body.last().expect("non-empty checked above") == b'/' {
+        return Err(UriRejectReason::EmptySegment);
+    }
+
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < body.len() {
+        if body[i] == b'/' {
+            let seg = &body[start..i];
+            validate_segment(seg, cfg)?;
+            start = i + 1;
+        }
+        i += 1;
+    }
+    // Final segment.
+    validate_segment(&body[start..], cfg)?;
+    Ok(())
+}
+
+/// Validate a single Uri-Query *key* (the `k` in `k=v`, or the whole option
+/// when no `=` is present). Same checks as [`validate_segment`].
+pub fn validate_uri_query_key(
+    key: &[u8],
+    cfg: &CoapValidationConfig,
+) -> Result<(), UriRejectReason> {
+    validate_segment(key, cfg)
+}
 
 // ---------------------------------------------------------------------------
 // URI rule
@@ -341,6 +592,9 @@ pub struct CoapInspectResult {
     pub alerts: [SecurityAlert; 4],
     /// Number of alerts dropped because the alert array was full.
     pub alerts_dropped: u8,
+    /// If the frame was rejected by Uri-Path / Uri-Query normalization, the
+    /// specific reason. `None` for any other allow/deny outcome.
+    pub reject_reason: Option<UriRejectReason>,
 }
 
 impl CoapInspectResult {
@@ -357,6 +611,7 @@ impl CoapInspectResult {
                 timestamp_us: 0,
             }; 4],
             alerts_dropped: 0,
+            reject_reason: None,
         }
     }
 
@@ -412,6 +667,8 @@ pub struct CoapMonitor {
     /// Pending alert flag: set when the tracker drops an active entry,
     /// emitted and cleared on the next `inspect()` call.
     tracker_saturated_alert_pending: bool,
+    /// Configuration governing Uri-Path / Uri-Query normalization checks.
+    validation_cfg: CoapValidationConfig,
 }
 
 impl CoapMonitor {
@@ -433,7 +690,21 @@ impl CoapMonitor {
             total_alerts: 0,
             requests_dropped: 0,
             tracker_saturated_alert_pending: false,
+            validation_cfg: CoapValidationConfig::new(),
         }
+    }
+
+    /// Override the Uri-Path / Uri-Query normalization configuration.
+    #[inline]
+    pub fn set_validation_config(&mut self, cfg: CoapValidationConfig) {
+        self.validation_cfg = cfg;
+    }
+
+    /// Returns the current Uri-Path / Uri-Query normalization configuration.
+    #[inline]
+    #[must_use]
+    pub fn validation_config(&self) -> CoapValidationConfig {
+        self.validation_cfg
     }
 
     /// Create a new `CoAP` monitor (deny-by-default).
@@ -569,6 +840,22 @@ impl CoapMonitor {
         }
 
         let uri = msg.uri_bytes();
+
+        // Uri-Path normalization. The check runs on the *raw* received bytes
+        // and percent-decodes exactly once — see `percent_decode_once` for the
+        // rationale on why iterative decoding is itself a vulnerability.
+        if let Err(reason) = validate_uri_path(uri, &self.validation_cfg) {
+            result.allowed = false;
+            result.reject_reason = Some(reason);
+            result.push_alert(
+                AlertSeverity::High,
+                reason.alert_source_id(),
+                msg.timestamp_us,
+                self.next_alert_id(),
+            );
+            self.total_alerts = self.total_alerts.saturating_add(1);
+            return result;
+        }
 
         // Find matching rule (longest prefix match).
         let mut best_match: Option<usize> = None;
@@ -1712,5 +1999,200 @@ mod tests {
         msg.timestamp_us = 1_000_000;
         let r = monitor.inspect(&msg);
         assert!(!r.allowed, "token_len > 8 must be rejected");
+    }
+
+    // -----------------------------------------------------------------------
+    // URI normalization tests (path-traversal / NUL / empty / oversize).
+    // -----------------------------------------------------------------------
+
+    fn inspect_uri(uri: &[u8]) -> CoapInspectResult {
+        let mut mon = CoapMonitor::new();
+        let msg = make_request(uri, CoapMethod::Get, 1_000_000);
+        mon.inspect(&msg)
+    }
+
+    #[test]
+    fn uri_norm_happy_path_well_known_core() {
+        let r = inspect_uri(b"/.well-known/core");
+        assert!(r.allowed, "/.well-known/core must be accepted");
+        assert!(r.reject_reason.is_none());
+    }
+
+    #[test]
+    fn uri_norm_rejects_literal_dotdot_segment() {
+        let r = inspect_uri(b"/foo/../etc");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::PathTraversal));
+    }
+
+    #[test]
+    fn uri_norm_rejects_single_dot_segment() {
+        let r = inspect_uri(b"/foo/./bar");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::PathTraversal));
+    }
+
+    #[test]
+    fn uri_norm_rejects_lowercase_pct_dotdot() {
+        // %2e%2e -> ".."
+        let r = inspect_uri(b"/foo/%2e%2e/bar");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::PathTraversal));
+    }
+
+    #[test]
+    fn uri_norm_rejects_uppercase_pct_dotdot() {
+        // %2E%2E -> ".."
+        let r = inspect_uri(b"/foo/%2E%2E/bar");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::PathTraversal));
+    }
+
+    #[test]
+    fn uri_norm_rejects_mixed_case_pct_dotdot() {
+        // %2e%2E -> ".."
+        let r = inspect_uri(b"/foo/%2e%2E/bar");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::PathTraversal));
+    }
+
+    #[test]
+    fn uri_norm_rejects_pct_dot_dot_mix() {
+        // "%2e." -> ".."
+        let r = inspect_uri(b"/foo/%2e./bar");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::PathTraversal));
+    }
+
+    #[test]
+    fn uri_norm_rejects_dot_pct_dot_mix() {
+        // ".%2e" -> ".."
+        let r = inspect_uri(b"/foo/.%2e/bar");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::PathTraversal));
+    }
+
+    #[test]
+    fn uri_norm_double_encoded_dotdot_passes() {
+        // %252e%252e decodes ONCE to the literal string "%2e%2e", which is NOT
+        // ".." and is therefore allowed. This is the documented single-pass
+        // policy: any layer that re-decodes already-decoded output is the
+        // bug; we never recursively decode here.
+        let r = inspect_uri(b"/foo/%252e%252e/bar");
+        assert!(
+            r.allowed,
+            "double-encoded %252e%252e must pass single-decode policy: {:?}",
+            r.reject_reason
+        );
+        assert!(r.reject_reason.is_none());
+    }
+
+    #[test]
+    fn uri_norm_rejects_pct_nul_byte() {
+        // %00 -> NUL.
+        let r = inspect_uri(b"/foo/bar%00baz/x");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::NulByte));
+    }
+
+    #[test]
+    fn uri_norm_rejects_literal_nul_byte() {
+        // Literal NUL inside a segment.
+        let mut buf = [0u8; 10];
+        buf[..4].copy_from_slice(b"/foo");
+        buf[4] = b'/';
+        buf[5] = b'a';
+        buf[6] = 0; // NUL
+        buf[7] = b'b';
+        let r = inspect_uri(&buf[..8]);
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::NulByte));
+    }
+
+    #[test]
+    fn uri_norm_rejects_empty_segment_double_slash() {
+        let r = inspect_uri(b"/foo//bar");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::EmptySegment));
+    }
+
+    #[test]
+    fn uri_norm_rejects_trailing_slash() {
+        let r = inspect_uri(b"/foo/bar/");
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::EmptySegment));
+    }
+
+    #[test]
+    fn uri_norm_oversized_segment() {
+        // Force max_segment_len = 4 to keep the test small.
+        let mut mon = CoapMonitor::new();
+        mon.set_validation_config(CoapValidationConfig::new().with_max_segment_len(4));
+        let msg = make_request(b"/abcde", CoapMethod::Get, 1_000_000);
+        let r = mon.inspect(&msg);
+        assert!(!r.allowed);
+        assert_eq!(r.reject_reason, Some(UriRejectReason::OversizedSegment));
+    }
+
+    #[test]
+    fn uri_norm_query_key_rejects_dotdot() {
+        let cfg = CoapValidationConfig::new();
+        assert_eq!(
+            validate_uri_query_key(b"..", &cfg),
+            Err(UriRejectReason::PathTraversal)
+        );
+        assert_eq!(
+            validate_uri_query_key(b"%2e%2e", &cfg),
+            Err(UriRejectReason::PathTraversal)
+        );
+    }
+
+    #[test]
+    fn uri_norm_query_key_rejects_nul_and_empty() {
+        let cfg = CoapValidationConfig::new();
+        assert_eq!(
+            validate_uri_query_key(b"k%00ey", &cfg),
+            Err(UriRejectReason::NulByte)
+        );
+        assert_eq!(
+            validate_uri_query_key(b"", &cfg),
+            Err(UriRejectReason::EmptySegment)
+        );
+    }
+
+    #[test]
+    fn uri_norm_query_key_oversize() {
+        let cfg = CoapValidationConfig::new().with_max_segment_len(2);
+        assert_eq!(
+            validate_uri_query_key(b"abc", &cfg),
+            Err(UriRejectReason::OversizedSegment)
+        );
+    }
+
+    #[test]
+    fn uri_norm_alert_emitted_with_correct_source_id() {
+        let r = inspect_uri(b"/foo/../bar");
+        assert!(!r.allowed);
+        assert_eq!(r.alert_count, 1);
+        assert_eq!(r.alerts[0].source_id, ALERT_URI_PATH_TRAVERSAL);
+        assert_eq!(r.alerts[0].severity, AlertSeverity::High);
+    }
+
+    #[test]
+    fn uri_norm_root_only_allowed() {
+        // A bare "/" has no segments — accepted.
+        let r = inspect_uri(b"/");
+        assert!(r.allowed, "bare '/' should pass: {:?}", r.reject_reason);
+    }
+
+    #[test]
+    fn uri_norm_empty_uri_allowed() {
+        // No URI at all = root resource per RFC 7252.
+        let mut mon = CoapMonitor::new();
+        let mut msg = CoapMessage::default();
+        msg.uri_len = 0;
+        msg.timestamp_us = 1_000_000;
+        let r = mon.inspect(&msg);
+        assert!(r.allowed);
     }
 }
