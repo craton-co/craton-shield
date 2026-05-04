@@ -302,9 +302,7 @@ fn skip_json_escape(json: &[u8], i: usize) -> usize {
     if i < json.len()
         && json[i] == b'u'
         && i + 5 <= json.len()
-        && json[i + 1..i + 5]
-            .iter()
-            .all(|&h| matches!(h, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'))
+        && json[i + 1..i + 5].iter().all(u8::is_ascii_hexdigit)
     {
         i + 5 // skip 'u' + 4 hex digits
     } else {
