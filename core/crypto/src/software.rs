@@ -37,7 +37,7 @@ use hkdf::Hkdf;
 use hmac::Mac;
 use sha2::{Digest, Sha256};
 
-use p256::ecdsa::signature::Verifier;
+use p256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use p256::elliptic_curve::sec1::FromEncodedPoint;
 use p256::{AffinePoint, EncodedPoint, PublicKey};
@@ -347,8 +347,15 @@ impl CryptoProvider for RustCryptoProvider {
         let signing_key =
             SigningKey::from_bytes(scalar_bytes.into()).map_err(|_| VsError::CryptoError)?;
 
+        // `digest` is already the SHA-256 hash of the message (per the trait
+        // contract). Sign the prehash directly via `PrehashSigner` so the
+        // ECDSA crate does NOT hash it a second time. Using the plain
+        // `Signer::sign` here would compute `SHA-256(digest)` and break
+        // interop with HSMs / other libraries that sign the raw digest.
         // RFC 6979 deterministic k — no RNG needed.
-        let sig: Signature = ecdsa::signature::Signer::sign(&signing_key, digest);
+        let sig: Signature = signing_key
+            .sign_prehash(digest)
+            .map_err(|_| VsError::CryptoError)?;
 
         // Raw (r || s) encoding, 64 bytes.
         sig_out.copy_from_slice(&sig.to_bytes());
@@ -370,7 +377,10 @@ impl CryptoProvider for RustCryptoProvider {
         // Parse (r || s) signature.
         let signature = Signature::from_slice(sig).map_err(|_| VsError::InvalidInput)?;
 
-        match verifying_key.verify(digest, &signature) {
+        // `digest` is already-hashed (per the trait contract): verify the
+        // prehash directly so the ECDSA crate does not re-hash it. Must
+        // match `sign_p256`, which signs the prehash.
+        match verifying_key.verify_prehash(digest, &signature) {
             Ok(()) => Ok(true),
             Err(_) => Ok(false),
         }
@@ -596,8 +606,13 @@ impl RustCryptoProvider {
                 .map_err(|_| VsError::CryptoError)?;
             let verifying_key = VerifyingKey::from(&signing_key);
 
-            // RFC 6979 deterministic signing (SHA-256 hash of "sample" is computed internally)
-            let sig: Signature = ecdsa::signature::Signer::sign(&signing_key, b"sample");
+            // RFC 6979 deterministic signing. `sign_p256` signs an
+            // already-hashed digest via `PrehashSigner`, so the KAT must
+            // feed it `SHA-256("sample")` rather than the raw message.
+            let sample_digest = Sha256::digest(b"sample");
+            let sig: Signature = signing_key
+                .sign_prehash(&sample_digest)
+                .map_err(|_| VsError::CryptoError)?;
             let sig_bytes = sig.to_bytes();
 
             // Compare r (first 32 bytes) and s (last 32 bytes) against expected values
@@ -610,7 +625,7 @@ impl RustCryptoProvider {
 
             // Verify the signature against the derived public key
             verifying_key
-                .verify(b"sample", &sig)
+                .verify_prehash(&sample_digest, &sig)
                 .map_err(|_| VsError::CryptoError)?;
         }
 

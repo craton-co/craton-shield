@@ -182,8 +182,13 @@ pub trait CryptoProvider {
         shared_out: &mut [u8; 32],
     ) -> Result<(), VsError>;
 
-    /// Sign `digest` (already-hashed) with ECDSA P-256 using the key in
-    /// `key_id`.  Writes a raw r||s 64-byte signature to `sig_out`.
+    /// Sign `digest` with ECDSA P-256 using the key in `key_id`.  Writes a
+    /// raw r||s 64-byte signature to `sig_out`.
+    ///
+    /// `digest` MUST already be a 32-byte message hash (e.g. SHA-256 of the
+    /// message). Implementations sign the prehash directly and MUST NOT hash
+    /// `digest` a second time — this keeps signatures interoperable with
+    /// HSMs and other libraries that operate on the raw digest.
     fn sign_p256(
         &self,
         key_id: KeyId,
