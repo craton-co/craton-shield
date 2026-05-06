@@ -208,61 +208,79 @@ impl Default for RustCryptoPqProvider {
 /// Adapter that wraps `fn(&mut [u8])` into `rand_core::CryptoRngCore`.
 struct FnRng(fn(&mut [u8]));
 
+impl FnRng {
+    /// Returns `true` if `dest` looks like the output of a stuck/failed TRNG:
+    /// all-zero, or all-identical for buffers larger than one byte.
+    fn is_stuck_output(dest: &[u8]) -> bool {
+        if dest.is_empty() {
+            return false;
+        }
+        let mut acc: u8 = 0;
+        let mut all_same: u8 = 0;
+        let first = dest[0];
+        for &b in dest.iter() {
+            acc |= b;
+            all_same |= b ^ first;
+        }
+        // Reject all-zero output, and all-identical output for buffers > 1
+        // byte (e.g. a TRNG stuck at 0xFF).
+        acc == 0 || (dest.len() > 1 && all_same == 0)
+    }
+}
+
 impl rand_core::RngCore for FnRng {
     fn next_u32(&mut self) -> u32 {
         let mut buf = [0u8; 4];
-        (self.0)(&mut buf);
+        self.fill_bytes(&mut buf);
         u32::from_le_bytes(buf)
     }
 
     fn next_u64(&mut self) -> u64 {
         let mut buf = [0u8; 8];
-        (self.0)(&mut buf);
+        self.fill_bytes(&mut buf);
         u64::from_le_bytes(buf)
     }
 
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         (self.0)(dest);
+        // The `ml-kem`/`ml-dsa` crates draw encapsulation/signing randomness
+        // through the infallible `fill_bytes` (NOT `try_fill_bytes`). If this
+        // path skipped the stuck-RNG check, a stuck/zero TRNG would silently
+        // yield predictable ML-KEM ciphertexts. `fill_bytes` cannot return an
+        // error, so fail closed by panicking — refusing the operation is far
+        // safer than emitting attacker-predictable key material.
+        if Self::is_stuck_output(dest) {
+            // Zeroize before panicking so the stuck value does not linger.
+            dest.zeroize();
+            panic!("FnRng: entropy source produced stuck/degenerate output (TRNG failure)");
+        }
     }
 
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
         (self.0)(dest);
         // Check that the RNG produced non-trivial output for any non-empty buffer.
         // An all-zero or all-identical fill from a TRNG indicates hardware failure.
-        if !dest.is_empty() {
-            let mut acc: u8 = 0;
-            let mut all_same: u8 = 0;
-            let first = dest[0];
-            for &b in dest.iter() {
-                acc |= b;
-                all_same |= b ^ first;
-            }
-            // Reject all-zero output.
-            // Also reject all-identical output for buffers > 1 byte, which
-            // indicates a stuck TRNG (e.g., always returning 0xFF).
-            let is_bad = acc == 0 || (dest.len() > 1 && all_same == 0);
-            if is_bad {
-                // Use a nonzero error code since rand_core::Error::new()
-                // requires std. Code 0xDEAD indicates RNG output failure.
-                //
-                // F-08: the `0xDEAD != 0` invariant is proven at compile
-                // time via the `const _: () = assert!(...)` below; the
-                // dead-branch of `NonZeroU32::new` becomes genuinely
-                // unreachable, so we mark it as such instead of panicking.
-                const _: () = assert!(0xDEAD != 0, "RNG_FAIL_CODE must be non-zero");
-                const RNG_FAIL_CODE: core::num::NonZeroU32 =
-                    match core::num::NonZeroU32::new(0xDEAD) {
-                        Some(v) => v,
-                        // SAFETY (logic, not memory): the const-assert
-                        // above proves the operand is non-zero, so this
-                        // branch is unreachable.  `unreachable!` is
-                        // permitted in const because it is never
-                        // evaluated; it documents the invariant without
-                        // introducing a release-build panic path.
-                        None => unreachable!(),
-                    };
-                return Err(rand_core::Error::from(RNG_FAIL_CODE));
-            }
+        if Self::is_stuck_output(dest) {
+            // Use a nonzero error code since rand_core::Error::new()
+            // requires std. Code 0xDEAD indicates RNG output failure.
+            //
+            // F-08: the `0xDEAD != 0` invariant is proven at compile
+            // time via the `const _: () = assert!(...)` below; the
+            // dead-branch of `NonZeroU32::new` becomes genuinely
+            // unreachable, so we mark it as such instead of panicking.
+            const _: () = assert!(0xDEAD != 0, "RNG_FAIL_CODE must be non-zero");
+            const RNG_FAIL_CODE: core::num::NonZeroU32 =
+                match core::num::NonZeroU32::new(0xDEAD) {
+                    Some(v) => v,
+                    // SAFETY (logic, not memory): the const-assert
+                    // above proves the operand is non-zero, so this
+                    // branch is unreachable.  `unreachable!` is
+                    // permitted in const because it is never
+                    // evaluated; it documents the invariant without
+                    // introducing a release-build panic path.
+                    None => unreachable!(),
+                };
+            return Err(rand_core::Error::from(RNG_FAIL_CODE));
         }
         Ok(())
     }
