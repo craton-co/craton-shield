@@ -49,7 +49,13 @@ echo "Running local CI in Docker image: ${DOCKER_IMAGE}"
 echo "Repository: ${REPO_ROOT}"
 echo ""
 
-docker run --rm -it \
+# Only request an interactive TTY when one is actually available.
+DOCKER_TTY_FLAGS=()
+if [[ -t 0 && -t 1 ]]; then
+    DOCKER_TTY_FLAGS=(-it)
+fi
+
+docker run --rm "${DOCKER_TTY_FLAGS[@]}" \
     -e RUST_BACKTRACE=1 \
     -e CARGO_TERM_COLOR=always \
     -v "${REPO_ROOT}:/work" \
@@ -58,4 +64,4 @@ docker run --rm -it \
     -v "${REPO_ROOT}/target:/work/target" \
     -w /work \
     "${DOCKER_IMAGE}" \
-    bash -lc './scripts/local-ci.sh "$@"' _ "$@"
+    bash -c './scripts/local-ci.sh "$@"' _ "$@"

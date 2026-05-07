@@ -182,7 +182,21 @@ fn blocked_mqtt_result() -> MqttInspectResult {
 
 #[inline]
 fn blocked_coap_result() -> CoapInspectResult {
-    blocked_result!(CoapInspectResult, vs_types_embedded::SOURCE_COAP)
+    const SENTINEL: SecurityAlert = SecurityAlert {
+        id: 0,
+        severity: vs_types::AlertSeverity::Info,
+        source_type: vs_types_embedded::SOURCE_COAP,
+        source_id: 0,
+        payload_hash: vs_types::PayloadHash::ZERO,
+        timestamp_us: 0,
+    };
+    CoapInspectResult {
+        allowed: false,
+        alert_count: 0,
+        alerts: [SENTINEL; 4],
+        alerts_dropped: 0,
+        reject_reason: None,
+    }
 }
 
 #[inline]

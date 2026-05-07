@@ -123,7 +123,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: rustsec/audit-check@8571f2a16d67e9bc25f8cfbcb38e5541c9a48b1a # v2.0.0
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -136,7 +136,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb20f53e8b695cdcc8de1b # stable
         with:
           toolchain: stable
-      - uses: EmbarkStudios/cargo-deny-action@34899fc7ba81ca6268d5947f4b38537b11769e22 # v2.0.5
+      - uses: EmbarkStudios/cargo-deny-action@13fd9ef18c30518efe066a8ac36cd629cc377507 # v2.0.5
         with:
           command: check
 
@@ -180,7 +180,7 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@5a81a310d23893f77fe14ba7a2e9cc8a76e2290b # v2.44.47
+        uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70 # v2.44.47
         with:
           tool: cargo-llvm-cov
       - name: Generate coverage (default features)

@@ -2642,9 +2642,25 @@ mod tests {
 
     #[test]
     fn persistence_callbacks_called_on_lockout_state_change() {
-        reset_persist_counters();
+        // Use dedicated local counters to avoid races with other tests that
+        // may reset shared global statics while this test is running.
+        static LOCAL_LOCKOUT_CALL_COUNT: AtomicU32 = AtomicU32::new(0);
+        static LOCAL_LOCKOUT_LAST_TESTER: AtomicU32 = AtomicU32::new(0);
+        static LOCAL_LOCKOUT_LAST_FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
+
+        LOCAL_LOCKOUT_CALL_COUNT.store(0, Ordering::SeqCst);
+        LOCAL_LOCKOUT_LAST_TESTER.store(0, Ordering::SeqCst);
+        LOCAL_LOCKOUT_LAST_FAIL_COUNT.store(0, Ordering::SeqCst);
+
+        #[allow(clippy::items_after_statements)]
+        fn local_persist_lockout(tester_addr: u16, fail_count: u8, _locked_until: u64, _gen: u8) {
+            LOCAL_LOCKOUT_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+            LOCAL_LOCKOUT_LAST_TESTER.store(tester_addr as u32, Ordering::SeqCst);
+            LOCAL_LOCKOUT_LAST_FAIL_COUNT.store(fail_count as u32, Ordering::SeqCst);
+        }
+
         let mut gw = make_gateway();
-        gw.set_persistence_callbacks(test_persist_entry, test_persist_lockout);
+        gw.set_persistence_callbacks(test_persist_entry, local_persist_lockout);
 
         let tester = 0x0FA1;
 
@@ -2652,22 +2668,22 @@ mod tests {
         let _ = send_bad_key(&mut gw, tester, 1_000_000);
 
         assert!(
-            PERSIST_LOCKOUT_CALL_COUNT.load(Ordering::SeqCst) >= 1,
+            LOCAL_LOCKOUT_CALL_COUNT.load(Ordering::SeqCst) >= 1,
             "persist_lockout should be called on first failure"
         );
         assert_eq!(
-            PERSIST_LOCKOUT_LAST_TESTER.load(Ordering::SeqCst),
+            LOCAL_LOCKOUT_LAST_TESTER.load(Ordering::SeqCst),
             tester as u32
         );
-        assert_eq!(PERSIST_LOCKOUT_LAST_FAIL_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(LOCAL_LOCKOUT_LAST_FAIL_COUNT.load(Ordering::SeqCst), 1);
 
         // Second bad key increments fail_count.
         let _ = send_bad_key(&mut gw, tester, 2_000_000);
-        assert_eq!(PERSIST_LOCKOUT_LAST_FAIL_COUNT.load(Ordering::SeqCst), 2);
+        assert_eq!(LOCAL_LOCKOUT_LAST_FAIL_COUNT.load(Ordering::SeqCst), 2);
 
         // Third bad key triggers lockout.
         let _ = send_bad_key(&mut gw, tester, 3_000_000);
-        assert_eq!(PERSIST_LOCKOUT_LAST_FAIL_COUNT.load(Ordering::SeqCst), 3);
+        assert_eq!(LOCAL_LOCKOUT_LAST_FAIL_COUNT.load(Ordering::SeqCst), 3);
     }
 
     #[test]
@@ -2714,9 +2730,17 @@ mod tests {
 
     #[test]
     fn persistence_lockout_callback_on_clear() {
-        reset_persist_counters();
+        // Use local counters to avoid cross-test races from shared statics.
+        static LOCAL_LOCKOUT_LAST_FAIL_COUNT: AtomicU32 = AtomicU32::new(0);
+        LOCAL_LOCKOUT_LAST_FAIL_COUNT.store(0, Ordering::SeqCst);
+
+        #[allow(clippy::items_after_statements)]
+        fn local_persist_lockout(_tester_addr: u16, fail_count: u8, _locked_until: u64, _gen: u8) {
+            LOCAL_LOCKOUT_LAST_FAIL_COUNT.store(fail_count as u32, Ordering::SeqCst);
+        }
+
         let mut gw = make_gateway();
-        gw.set_persistence_callbacks(test_persist_entry, test_persist_lockout);
+        gw.set_persistence_callbacks(test_persist_entry, local_persist_lockout);
 
         let tester = 0x0FA2;
 
@@ -2729,7 +2753,7 @@ mod tests {
 
         // The clear_lockout call should have invoked persist_lockout with fail_count=0.
         assert_eq!(
-            PERSIST_LOCKOUT_LAST_FAIL_COUNT.load(Ordering::SeqCst),
+            LOCAL_LOCKOUT_LAST_FAIL_COUNT.load(Ordering::SeqCst),
             0,
             "persist_lockout should be called with fail_count=0 after successful auth"
         );
