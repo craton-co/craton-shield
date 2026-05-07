@@ -2013,7 +2013,11 @@ mod tests {
         let addr = [0xA0; 4];
         for c in [1u32, 2, 3, 100, 1000] {
             let m = make_msg(addr, LoraMessageType::UnconfirmedUp, c, 1000 + c as u64);
-            assert!(mon.inspect(&m).allowed, "in-order counter {} should accept", c);
+            assert!(
+                mon.inspect(&m).allowed,
+                "in-order counter {} should accept",
+                c
+            );
         }
     }
 
@@ -2025,9 +2029,10 @@ mod tests {
         let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 100, 1000));
         let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 110, 2000));
         // Out-of-order delivery of 105 (in-window, unseen) is accepted.
-        assert!(mon
-            .inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 105, 3000))
-            .allowed);
+        assert!(
+            mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 105, 3000))
+                .allowed
+        );
         // Replay of 105 must be rejected.
         let r = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 105, 4000));
         assert!(!r.allowed, "replay within window must be rejected");
@@ -2039,11 +2044,22 @@ mod tests {
         let addr = [0xA2; 4];
         let _ = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 200, 1000));
         // diff=64 boundary still in window.
-        assert!(mon
-            .inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 200 - 64, 2000))
-            .allowed);
+        assert!(
+            mon.inspect(&make_msg(
+                addr,
+                LoraMessageType::UnconfirmedUp,
+                200 - 64,
+                2000
+            ))
+            .allowed
+        );
         // diff=65 is below the window.
-        let r = mon.inspect(&make_msg(addr, LoraMessageType::UnconfirmedUp, 200 - 65, 3000));
+        let r = mon.inspect(&make_msg(
+            addr,
+            LoraMessageType::UnconfirmedUp,
+            200 - 65,
+            3000,
+        ));
         assert!(!r.allowed, "frame below 64-counter window must be rejected");
     }
 
@@ -2132,13 +2148,25 @@ mod tests {
             "new device after eviction must accept its own counter (no global floor)"
         );
         // Continue from the new device's counter.
-        assert!(mon
-            .inspect(&make_msg(new_addr, LoraMessageType::UnconfirmedUp, 6, 200_000_000))
-            .allowed);
+        assert!(
+            mon.inspect(&make_msg(
+                new_addr,
+                LoraMessageType::UnconfirmedUp,
+                6,
+                200_000_000
+            ))
+            .allowed
+        );
         // Replay of 5 on the new device is rejected.
-        assert!(!mon
-            .inspect(&make_msg(new_addr, LoraMessageType::UnconfirmedUp, 5, 300_000_000))
-            .allowed);
+        assert!(
+            !mon.inspect(&make_msg(
+                new_addr,
+                LoraMessageType::UnconfirmedUp,
+                5,
+                300_000_000
+            ))
+            .allowed
+        );
     }
 
     #[test]
@@ -2148,19 +2176,28 @@ mod tests {
         let a = [0xB0; 4];
         let b = [0xB1; 4];
         // Device A advances to a high counter.
-        assert!(mon
-            .inspect(&make_msg(a, LoraMessageType::UnconfirmedUp, 1_000_000, 1000))
-            .allowed);
+        assert!(
+            mon.inspect(&make_msg(
+                a,
+                LoraMessageType::UnconfirmedUp,
+                1_000_000,
+                1000
+            ))
+            .allowed
+        );
         // Device B can still legitimately start at 1.
-        assert!(mon
-            .inspect(&make_msg(b, LoraMessageType::UnconfirmedUp, 1, 2000))
-            .allowed);
-        assert!(mon
-            .inspect(&make_msg(b, LoraMessageType::UnconfirmedUp, 2, 3000))
-            .allowed);
+        assert!(
+            mon.inspect(&make_msg(b, LoraMessageType::UnconfirmedUp, 1, 2000))
+                .allowed
+        );
+        assert!(
+            mon.inspect(&make_msg(b, LoraMessageType::UnconfirmedUp, 2, 3000))
+                .allowed
+        );
         // Device A still rejects its own old counter (out of window).
-        assert!(!mon
-            .inspect(&make_msg(a, LoraMessageType::UnconfirmedUp, 1, 4000))
-            .allowed);
+        assert!(
+            !mon.inspect(&make_msg(a, LoraMessageType::UnconfirmedUp, 1, 4000))
+                .allowed
+        );
     }
 }

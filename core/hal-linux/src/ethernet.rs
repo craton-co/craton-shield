@@ -159,9 +159,7 @@ impl LinuxEthernetPhy {
         // Cache interface name.
         let mut ifname = [0_i8; libc::IFNAMSIZ];
         for (i, &b) in interface.as_bytes().iter().enumerate() {
-            // Cast u8 to i8 for libc ifreq compatibility (ASCII values are
-            // identical in both signed and unsigned representation).
-            ifname[i] = b as libc::c_char;
+            ifname[i] = libc::c_char::try_from(b).map_err(|_| VsError::InvalidInput)?;
         }
 
         // SAFETY: creating a raw AF_PACKET socket. All pointers are to valid
@@ -179,7 +177,7 @@ impl LinuxEthernetPhy {
             // Resolve interface name to index
             let mut ifr: libc::ifreq = core::mem::zeroed();
             for (i, &b) in interface.as_bytes().iter().enumerate() {
-                ifr.ifr_name[i] = b as libc::c_char;
+                ifr.ifr_name[i] = libc::c_char::try_from(b).map_err(|_| VsError::InvalidInput)?;
             }
             if libc::ioctl(fd, libc::SIOCGIFINDEX as libc::c_ulong, &raw mut ifr) < 0 {
                 libc::close(fd);
@@ -267,6 +265,9 @@ impl LinuxEthernetPhy {
 
 impl Drop for LinuxEthernetPhy {
     fn drop(&mut self) {
+        if self.fd < 0 {
+            return;
+        }
         // SAFETY: Closing a valid file descriptor exactly once. The fd was obtained
         // from socket() in new() and is owned exclusively by this struct. No other
         // code closes this fd.
@@ -378,8 +379,7 @@ mod tests {
         };
         let err = phy.transmit(&data);
         assert_eq!(err, Err(VsError::ResourceExhausted));
-        // Use mem::forget to prevent Drop from closing fd=-1.
-        core::mem::forget(phy);
+        drop(phy);
     }
 
     #[test]
