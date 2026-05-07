@@ -14,6 +14,8 @@ readme = "README.md"
 [dependencies]
 vs-types = { path = "../../core/types" }
 vs-types-embedded = { path = "../types-embedded" }
+aes = { version = "0.8", default-features = false }
+cmac = { version = "0.7", default-features = false }
 
 [features]
 default = []
