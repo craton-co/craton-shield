@@ -14,7 +14,7 @@ implementations are available in
 
 | Trait | Operations |
 |:------|:-----------|
-| `CryptoProvider` | AES-128/256-GCM, SHA-256, HMAC-SHA-256, ECDSA P-256 sign/verify, ECDH P-256, RNG |
+| `CryptoProvider` | AES-256-GCM, SHA-256, HMAC-SHA-256, ECDSA P-256 sign/verify, ECDH P-256, RNG |
 | `PostQuantumProvider` | ML-KEM-768 (FIPS 203), ML-DSA-65 (FIPS 204) |
 
 ## Feature Flags
