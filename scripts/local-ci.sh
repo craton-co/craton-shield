@@ -241,18 +241,28 @@ job_doc() {
 }
 
 job_audit() {
-    if ! command -v cargo-audit &>/dev/null; then
+    if ! rustup toolchain list | grep -q "^stable"; then
+        echo "Installing stable toolchain for cargo-audit..."
+        rustup toolchain install stable --profile minimal
+    fi
+
+    if ! cargo +stable audit --version &>/dev/null; then
         echo "Installing cargo-audit..."
-        cargo install cargo-audit --locked
+        cargo +stable install cargo-audit --locked
     fi
     # Use a separate DB path to avoid conflicts with cargo-deny's advisory DB cache
-    cargo audit --db "${CARGO_HOME:-$HOME/.cargo}/advisory-db-audit"
+    cargo +stable audit --db "${CARGO_HOME:-$HOME/.cargo}/advisory-db-audit"
 }
 
 job_deny() {
-    if ! command -v cargo-deny &>/dev/null; then
+    if ! rustup toolchain list | grep -q "^stable"; then
+        echo "Installing stable toolchain for cargo-deny..."
+        rustup toolchain install stable --profile minimal
+    fi
+
+    if ! cargo +stable deny --version &>/dev/null; then
         echo "Installing cargo-deny..."
-        cargo install cargo-deny --version 0.17.0 --locked
+        cargo +stable install cargo-deny --locked
     fi
 
     # Workaround: cargo-deny's advisory DB parser fails on CRLF line endings.
@@ -270,7 +280,7 @@ job_deny() {
         fi
     fi
 
-    cargo deny check
+    cargo +stable deny check
 }
 
 job_msrv() {

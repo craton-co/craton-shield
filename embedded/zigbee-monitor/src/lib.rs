@@ -1305,7 +1305,7 @@ mod tests {
         let mut mon = ZigbeeMonitor::new();
         assert!(mon.check_security_counter(0x0001, 10, 1000));
         assert!(mon.check_security_counter(0x0002, 5, 2000)); // different addr
-        // Replay of 10 on addr 1 is rejected.
+                                                              // Replay of 10 on addr 1 is rejected.
         assert!(!mon.check_security_counter(0x0001, 10, 3000));
         assert!(mon.check_security_counter(0x0002, 6, 4000)); // ok on addr 2
     }

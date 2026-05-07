@@ -283,7 +283,7 @@ impl LinuxCanBus {
             // 2. Resolve interface name to index via libc::ifreq
             let mut ifr: libc::ifreq = core::mem::zeroed();
             for (i, &b) in interface.as_bytes().iter().enumerate() {
-                ifr.ifr_name[i] = b as libc::c_char;
+                ifr.ifr_name[i] = libc::c_char::try_from(b).map_err(|_| VsError::InvalidInput)?;
             }
             if libc::ioctl(fd, SIOCGIFINDEX, &raw mut ifr) < 0 {
                 libc::close(fd);
@@ -561,6 +561,9 @@ impl LinuxCanBus {
 
 impl Drop for LinuxCanBus {
     fn drop(&mut self) {
+        if self.fd < 0 {
+            return;
+        }
         // SAFETY: closing a valid file descriptor exactly once.
         // The fd was obtained from socket() in new() and is owned exclusively
         // by this struct. No other code closes this fd.
@@ -1056,8 +1059,7 @@ mod tests {
         };
         bus.process_error_frame(CAN_ERR_FLAG | CAN_ERR_BUSOFF, &[0u8; 8]);
         assert_eq!(bus.last_error, CanError::BusOff);
-        // Prevent drop from closing invalid fd (harmless but clean).
-        core::mem::forget(bus);
+        drop(bus);
     }
 
     #[test]
@@ -1076,7 +1078,7 @@ mod tests {
         };
         bus.process_error_frame(CAN_ERR_FLAG | CAN_ERR_ACK, &[0u8; 8]);
         assert_eq!(bus.last_error, CanError::AckError);
-        core::mem::forget(bus);
+        drop(bus);
     }
 
     #[test]
@@ -1097,7 +1099,7 @@ mod tests {
         data[2] = CAN_ERR_PROT_STUFF;
         bus.process_error_frame(CAN_ERR_FLAG | CAN_ERR_BUSERROR, &data);
         assert_eq!(bus.last_error, CanError::BitStuffing);
-        core::mem::forget(bus);
+        drop(bus);
     }
 
     #[test]
@@ -1118,6 +1120,6 @@ mod tests {
         data[1] = CAN_ERR_CRTL_RX_OVERFLOW;
         bus.process_error_frame(CAN_ERR_FLAG | CAN_ERR_CRTL, &data);
         assert_eq!(bus.last_error, CanError::Overrun);
-        core::mem::forget(bus);
+        drop(bus);
     }
 }

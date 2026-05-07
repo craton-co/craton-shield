@@ -308,10 +308,7 @@ pub fn validate_segment(raw: &[u8], cfg: &CoapValidationConfig) -> Result<(), Ur
 /// A leading `/` is permitted (and conventional in this codebase). Any other
 /// empty segment — including a trailing `/` or a doubled `//` — is rejected
 /// with [`UriRejectReason::EmptySegment`].
-pub fn validate_uri_path(
-    path: &[u8],
-    cfg: &CoapValidationConfig,
-) -> Result<(), UriRejectReason> {
+pub fn validate_uri_path(path: &[u8], cfg: &CoapValidationConfig) -> Result<(), UriRejectReason> {
     if path.is_empty() {
         // An empty Uri-Path is the root resource — RFC 7252 represents this as
         // "no Uri-Path options at all", which is fine. Nothing to validate.
