@@ -28,8 +28,6 @@ implementations are available in
 | `pq-cache` | Single-slot LRU cache for the last reconstructed ML-KEM key pair (~8 KB resident, ~10x speedup on repeated encap/decap with the same slot). Implies `pq`. |
 | `bench` | Enables the Criterion benchmarks under `benches/`. Opt-in to keep the default build free of bench-only dev-deps. |
 
-See [docs/feature-flags.md](../../docs/feature-flags.md) for the full workspace feature reference.
-
 ## Usage
 
 ```rust
