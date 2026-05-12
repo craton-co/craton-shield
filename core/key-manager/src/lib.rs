@@ -212,6 +212,19 @@ fn audit_entry_to_bytes(e: &AuditEntry) -> [u8; 25] {
     buf
 }
 
+/// An audit entry whose chain hash has already been computed but which has
+/// not yet been stored. Produced by `prepare_audit` (phase 1, fallible) and
+/// consumed by `commit_audit` (phase 2, infallible). Splitting the append
+/// this way lets a crypto failure abort a key operation *before* any slot
+/// state is mutated, so a committed key operation can never be paired with
+/// an unverifiable audit entry.
+#[derive(Clone, Copy)]
+struct PreparedAudit {
+    entry: AuditEntry,
+    chain_hash: [u8; 32],
+    is_overflow: bool,
+}
+
 /// Iterator over audit entries in chronological order.
 pub struct AuditIter<'a> {
     audit: &'a [Option<AuditEntry>; AUDIT_CAPACITY],
@@ -292,7 +305,14 @@ pub struct KeyManager<C: CryptoProvider> {
     /// re-provisioned.  Prevents nonce-space exhaustion when the same
     /// AES-GCM key is rotated across many reboots (birthday bound).
     max_rotation_count: Option<u32>,
-    /// Whether the audit checksum is in a valid state (set to false on crypto failure).
+    /// Whether the audit checksum is in a valid state.
+    ///
+    /// Under the fail-closed two-phase append (`prepare_audit` /
+    /// `commit_audit`), a crypto failure aborts the key operation *before*
+    /// any audit entry is committed, so an unverifiable (zero-chain) entry
+    /// is never stored and this flag is never cleared in normal operation.
+    /// It is retained as a defensive invariant: `verify_audit_integrity`
+    /// returns `CryptoError` if it is ever observed false.
     checksum_valid: bool,
     /// When true, key operations are rejected if the audit ring buffer
     /// would overflow and no overflow callback is set. This prevents
@@ -475,6 +495,17 @@ impl<C: CryptoProvider> KeyManager<C> {
     }
 
     /// Provision a new key into the specified slot.
+    ///
+    /// # Errors
+    ///
+    /// - [`VsError::ResourceExhausted`] — `key_id` out of range, or audit ring
+    ///   would overflow in fail-closed mode.
+    /// - [`VsError::InvalidInput`] — key material is empty, oversized, degenerate
+    ///   (all-zero / uniform), or the wrong length for the algorithm.
+    /// - [`VsError::InvalidConfig`] — `metadata.key_id` mismatch or invalid expiry.
+    /// - [`VsError::KeyRevoked`] / [`VsError::PolicyViolation`] — slot already revoked / active.
+    /// - [`VsError::CryptoError`] — the audit chain hash could not be computed.
+    ///   The slot is **not** mutated; the operation fails closed and may be retried.
     pub fn provision_key(
         &mut self,
         key_id: KeyId,
@@ -517,6 +548,13 @@ impl<C: CryptoProvider> KeyManager<C> {
             return Err(VsError::ResourceExhausted);
         }
 
+        // Phase 1: compute the audit entry + chain hash BEFORE mutating slot
+        // state. A crypto failure here aborts the whole operation with the
+        // slot unchanged, so a committed key operation can never be paired
+        // with an unverifiable (zero-chain) audit entry.
+        let prepared =
+            self.prepare_audit(AuditEventType::KeyProvisioned, key_id, metadata.created_at)?;
+
         let mut material = [0u8; MAX_KEY_MATERIAL_LEN];
         material[..key_material.len()].copy_from_slice(key_material);
 
@@ -528,7 +566,8 @@ impl<C: CryptoProvider> KeyManager<C> {
         };
         self.active_count = self.active_count.saturating_add(1);
 
-        self.append_audit(AuditEventType::KeyProvisioned, key_id, metadata.created_at)?;
+        // Phase 2: infallible commit of the already-validated audit entry.
+        self.commit_audit(prepared);
         Ok(())
     }
 
@@ -551,6 +590,16 @@ impl<C: CryptoProvider> KeyManager<C> {
     }
 
     /// Generate a new key using the crypto provider's RNG and provision it.
+    ///
+    /// # Errors
+    ///
+    /// - [`VsError::ResourceExhausted`] — `key_id` out of range, or audit ring
+    ///   would overflow in fail-closed mode.
+    /// - [`VsError::InvalidConfig`] — `metadata.key_id` mismatch or invalid expiry.
+    /// - [`VsError::InvalidInput`] — the RNG produced degenerate key material.
+    /// - [`VsError::KeyRevoked`] / [`VsError::PolicyViolation`] — slot already revoked / active.
+    /// - [`VsError::CryptoError`] — RNG failure, or the audit chain hash could not
+    ///   be computed. The slot is **not** mutated; the operation fails closed.
     pub fn generate_key(&mut self, key_id: KeyId, metadata: KeyMetadata) -> Result<(), VsError> {
         let idx = key_id.0 as usize;
         if idx >= MAX_KEYS {
@@ -582,6 +631,12 @@ impl<C: CryptoProvider> KeyManager<C> {
         // Validate generated material (reject degenerate RNG output)
         Self::validate_key_material(&material[..key_len])?;
 
+        // Phase 1: compute the audit entry + chain hash BEFORE mutating slot
+        // state, so a crypto failure aborts the operation with the slot
+        // unchanged rather than committing an unverifiable audit entry.
+        let prepared =
+            self.prepare_audit(AuditEventType::KeyGenerated, key_id, metadata.created_at)?;
+
         self.keys[idx] = KeyEntry {
             metadata,
             state: KeyState::Active,
@@ -590,11 +645,24 @@ impl<C: CryptoProvider> KeyManager<C> {
         };
         self.active_count = self.active_count.saturating_add(1);
 
-        self.append_audit(AuditEventType::KeyGenerated, key_id, metadata.created_at)?;
+        // Phase 2: infallible commit of the already-validated audit entry.
+        self.commit_audit(prepared);
         Ok(())
     }
 
     /// Rotate an existing key with new material.
+    ///
+    /// # Errors
+    ///
+    /// - [`VsError::ResourceExhausted`] — `key_id` out of range, rotation limit
+    ///   reached, nonce space exhausted, or audit ring overflow in fail-closed mode.
+    /// - [`VsError::InvalidInput`] — new material is empty, oversized, degenerate,
+    ///   or the wrong length for the slot's algorithm.
+    /// - [`VsError::InvalidConfig`] — the new expiry is not after `current_time`.
+    /// - [`VsError::KeyRevoked`] / [`VsError::KeyExpired`] / [`VsError::NotInitialized`]
+    ///   — slot not in the `Active` state.
+    /// - [`VsError::CryptoError`] — the audit chain hash could not be computed.
+    ///   The existing key material is **not** zeroized; the operation fails closed.
     pub fn rotate_key(
         &mut self,
         key_id: KeyId,
@@ -656,6 +724,12 @@ impl<C: CryptoProvider> KeyManager<C> {
             return Err(VsError::ResourceExhausted);
         }
 
+        // Phase 1: compute the audit entry + chain hash BEFORE zeroizing the
+        // old key material. A crypto failure here aborts the rotation with
+        // the existing key intact rather than destroying it and recording an
+        // unverifiable audit entry.
+        let prepared = self.prepare_audit(AuditEventType::KeyRotated, key_id, current_time)?;
+
         let entry = &mut self.keys[idx];
         entry.material.zeroize();
         entry.material[..new_material.len()].copy_from_slice(new_material);
@@ -666,7 +740,8 @@ impl<C: CryptoProvider> KeyManager<C> {
         entry.metadata.created_at = current_time;
         entry.metadata.expires_at = new_expires_at;
 
-        self.append_audit(AuditEventType::KeyRotated, key_id, current_time)?;
+        // Phase 2: infallible commit of the already-validated audit entry.
+        self.commit_audit(prepared);
         Ok(())
     }
 
@@ -699,6 +774,15 @@ impl<C: CryptoProvider> KeyManager<C> {
     }
 
     /// Revoke a key. Revoked keys become tombstones and cannot be re-provisioned.
+    ///
+    /// # Errors
+    ///
+    /// - [`VsError::ResourceExhausted`] — `key_id` out of range, or audit ring
+    ///   would overflow in fail-closed mode.
+    /// - [`VsError::KeyRevoked`] / [`VsError::KeyExpired`] / [`VsError::NotInitialized`]
+    ///   — slot not in the `Active` state.
+    /// - [`VsError::CryptoError`] — the audit chain hash could not be computed.
+    ///   The slot is **not** mutated; the operation fails closed and may be retried.
     pub fn revoke_key(&mut self, key_id: KeyId, current_time: u64) -> Result<(), VsError> {
         let idx = key_id.0 as usize;
         if idx >= MAX_KEYS {
@@ -719,12 +803,19 @@ impl<C: CryptoProvider> KeyManager<C> {
             return Err(VsError::ResourceExhausted);
         }
 
+        // Phase 1: compute the audit entry + chain hash BEFORE mutating slot
+        // state, so a crypto failure aborts the revocation with the slot
+        // unchanged rather than committing an unverifiable audit entry.
+        let prepared = self.prepare_audit(AuditEventType::KeyRevoked, key_id, current_time)?;
+
         let entry = &mut self.keys[idx];
         entry.state = KeyState::Revoked;
         entry.material.zeroize();
         entry.material_len = 0;
         self.active_count = self.active_count.saturating_sub(1);
-        self.append_audit(AuditEventType::KeyRevoked, key_id, current_time)?;
+
+        // Phase 2: infallible commit of the already-validated audit entry.
+        self.commit_audit(prepared);
         Ok(())
     }
 
@@ -909,12 +1000,44 @@ impl<C: CryptoProvider> KeyManager<C> {
         Ok(ok && tail_ok)
     }
 
+    /// Append an audit entry for a state-mutating key operation.
+    ///
+    /// This is a fail-closed two-phase operation. [`prepare_audit`] computes
+    /// the new entry and its chain hash *before* the caller mutates slot
+    /// state; if the crypto provider fails to compute the chain hash it
+    /// returns [`VsError::CryptoError`] and the caller must abort the whole
+    /// operation with no slot mutation. [`commit_audit`] then stores the
+    /// already-validated entry and can never fail.
+    ///
+    /// `append_audit` is retained for the best-effort [`tick`](Self::tick)
+    /// expiry path, where the key transition cannot be undone: it prepares
+    /// and commits in one call and propagates a `prepare_audit` error so the
+    /// caller can observe (and discard) it.
     fn append_audit(
         &mut self,
         event_type: AuditEventType,
         key_id: KeyId,
         timestamp: u64,
     ) -> Result<(), VsError> {
+        let prepared = self.prepare_audit(event_type, key_id, timestamp)?;
+        self.commit_audit(prepared);
+        Ok(())
+    }
+
+    /// Phase 1 of an audit append: compute the new entry and its chain hash
+    /// without mutating any audit or key state.
+    ///
+    /// Returns [`VsError::CryptoError`] if the chain hash cannot be computed
+    /// (the crypto provider failed every retry) and [`VsError::ResourceExhausted`]
+    /// if a fail-closed ring overflow would occur. Callers MUST invoke this
+    /// (and propagate any error) *before* mutating slot state, so that an
+    /// unverifiable audit entry can never accompany a committed key operation.
+    fn prepare_audit(
+        &mut self,
+        event_type: AuditEventType,
+        key_id: KeyId,
+        timestamp: u64,
+    ) -> Result<PreparedAudit, VsError> {
         let is_overflow = self.audit[self.audit_head].is_some();
         if is_overflow {
             // Fail-closed: reject the operation if audit would overflow
@@ -922,6 +1045,40 @@ impl<C: CryptoProvider> KeyManager<C> {
             if self.audit_fail_closed && self.audit_overflow_callback.is_none() {
                 return Err(VsError::ResourceExhausted);
             }
+        }
+
+        // Compute the new chain hash from the previous tail in O(1).
+        //
+        // The per-entry chain_hash + tail-only audit_checksum design reduces
+        // both pre- and post-wrap appends to a single SHA-256 call.
+        let prev_chain = self.audit_checksum;
+        let mut new_entry = AuditEntry {
+            event_type,
+            key_id,
+            timestamp,
+            sequence: self.audit_count,
+            chain_hash: [0u8; 32],
+        };
+        let mut chain_hash = [0u8; 32];
+        // Fail-closed: a crypto failure here aborts the whole key operation
+        // (callers propagate this error before mutating slot state) instead
+        // of committing an entry with an unverifiable zero chain hash.
+        if !self.compute_chain_step(&prev_chain, &new_entry, &mut chain_hash) {
+            return Err(VsError::CryptoError);
+        }
+        new_entry.chain_hash = chain_hash;
+
+        Ok(PreparedAudit {
+            entry: new_entry,
+            chain_hash,
+            is_overflow,
+        })
+    }
+
+    /// Phase 2 of an audit append: store the entry prepared by
+    /// [`prepare_audit`]. Infallible — all crypto work happened in phase 1.
+    fn commit_audit(&mut self, prepared: PreparedAudit) {
+        if prepared.is_overflow {
             self.audit_overflow_count = self.audit_overflow_count.saturating_add(1);
             if let Some(cb) = self.audit_overflow_callback {
                 cb(self.audit_overflow_count);
@@ -936,34 +1093,10 @@ impl<C: CryptoProvider> KeyManager<C> {
             }
         }
 
-        // Compute the new chain hash from the previous tail in O(1).
-        //
-        // The previous implementation rebuilt the chain from scratch over all
-        // 256 entries on every post-wrap append (O(N) SHA-256 calls); the
-        // per-entry chain_hash + tail-only audit_checksum design here reduces
-        // both pre- and post-wrap appends to a single SHA-256 call.
-        let prev_chain = self.audit_checksum;
-        let mut new_entry = AuditEntry {
-            event_type,
-            key_id,
-            timestamp,
-            sequence: self.audit_count,
-            chain_hash: [0u8; 32],
-        };
-        let mut chain_hash = [0u8; 32];
-        if self.compute_chain_step(&prev_chain, &new_entry, &mut chain_hash) {
-            new_entry.chain_hash = chain_hash;
-            self.audit_checksum = chain_hash;
-        } else {
-            // Crypto failed even after retries; mark invalid but still record
-            // the entry (with zero chain) so callers can detect degradation.
-            self.audit_checksum = [0u8; 32];
-        }
-
-        self.audit[self.audit_head] = Some(new_entry);
+        self.audit_checksum = prepared.chain_hash;
+        self.audit[self.audit_head] = Some(prepared.entry);
         self.audit_head = (self.audit_head + 1) % AUDIT_CAPACITY;
         self.audit_count = self.audit_count.saturating_add(1);
-        Ok(())
     }
 
     /// Maximum number of SHA-256 retry attempts before giving up.
@@ -971,10 +1104,14 @@ impl<C: CryptoProvider> KeyManager<C> {
 
     /// Compute one chain step: SHA-256(prev_chain || entry_bytes).
     ///
-    /// Returns `true` on success. On failure (after retries) marks
-    /// `checksum_valid = false`.
+    /// Returns `true` on success, `false` if the crypto provider failed
+    /// every retry. A `false` result causes `prepare_audit` to abort the
+    /// key operation cleanly (no slot mutation, no audit entry committed),
+    /// so a *transient* crypto failure no longer permanently degrades the
+    /// audit trail — the existing log stays fully verifiable and the next
+    /// operation succeeds once the provider recovers.
     fn compute_chain_step(
-        &mut self,
+        &self,
         prev_chain: &[u8; 32],
         entry: &AuditEntry,
         out: &mut [u8; 32],
@@ -988,7 +1125,6 @@ impl<C: CryptoProvider> KeyManager<C> {
                 return true;
             }
         }
-        self.checksum_valid = false;
         false
     }
 
@@ -1166,12 +1302,108 @@ impl<C: CryptoProvider + Default> Default for KeyManager<C> {
 mod tests {
     use super::*;
     use alloc::format;
-    use vs_crypto::SoftwareCryptoProvider;
+    use core::cell::Cell;
+    use vs_crypto::{KeyType, SoftwareCryptoProvider};
 
     type TestManager = KeyManager<SoftwareCryptoProvider>;
 
     fn new_mgr() -> TestManager {
         KeyManager::new(SoftwareCryptoProvider::default())
+    }
+
+    /// A crypto provider that delegates to `SoftwareCryptoProvider` but can be
+    /// switched to fail every `sha256` call, used to exercise the fail-closed
+    /// audit crypto-failure path.
+    struct FailingCrypto {
+        inner: SoftwareCryptoProvider,
+        fail_sha256: Cell<bool>,
+    }
+
+    impl FailingCrypto {
+        fn new() -> Self {
+            Self {
+                inner: SoftwareCryptoProvider::default(),
+                fail_sha256: Cell::new(false),
+            }
+        }
+        fn set_fail(&self, fail: bool) {
+            self.fail_sha256.set(fail);
+        }
+    }
+
+    impl CryptoProvider for FailingCrypto {
+        fn aes_gcm_encrypt(
+            &self,
+            key_id: KeyId,
+            nonce: &[u8; 12],
+            plaintext: &[u8],
+            aad: &[u8],
+            ciphertext_out: &mut [u8],
+            tag_out: &mut [u8; 16],
+        ) -> Result<(), VsError> {
+            self.inner
+                .aes_gcm_encrypt(key_id, nonce, plaintext, aad, ciphertext_out, tag_out)
+        }
+        fn aes_gcm_decrypt(
+            &self,
+            key_id: KeyId,
+            nonce: &[u8; 12],
+            ciphertext: &[u8],
+            aad: &[u8],
+            tag: &[u8; 16],
+            plaintext_out: &mut [u8],
+        ) -> Result<(), VsError> {
+            self.inner
+                .aes_gcm_decrypt(key_id, nonce, ciphertext, aad, tag, plaintext_out)
+        }
+        fn sha256(&self, data: &[u8], hash_out: &mut [u8; 32]) -> Result<(), VsError> {
+            if self.fail_sha256.get() {
+                return Err(VsError::CryptoError);
+            }
+            self.inner.sha256(data, hash_out)
+        }
+        fn hmac_sha256(
+            &self,
+            key_id: KeyId,
+            data: &[u8],
+            mac_out: &mut [u8; 32],
+        ) -> Result<(), VsError> {
+            self.inner.hmac_sha256(key_id, data, mac_out)
+        }
+        fn ecdh_derive_shared(
+            &self,
+            private_key_id: KeyId,
+            peer_public: &[u8; 65],
+            shared_out: &mut [u8; 32],
+        ) -> Result<(), VsError> {
+            self.inner
+                .ecdh_derive_shared(private_key_id, peer_public, shared_out)
+        }
+        fn sign_p256(
+            &self,
+            key_id: KeyId,
+            digest: &[u8; 32],
+            sig_out: &mut [u8; 64],
+        ) -> Result<(), VsError> {
+            self.inner.sign_p256(key_id, digest, sig_out)
+        }
+        fn verify_p256(
+            &self,
+            pub_key: &[u8; 65],
+            digest: &[u8; 32],
+            sig: &[u8; 64],
+        ) -> Result<bool, VsError> {
+            self.inner.verify_p256(pub_key, digest, sig)
+        }
+        fn random_bytes(&self, buf: &mut [u8]) -> Result<(), VsError> {
+            self.inner.random_bytes(buf)
+        }
+        fn delete_key(&mut self, key_id: KeyId) -> Result<(), VsError> {
+            self.inner.delete_key(key_id)
+        }
+        fn generate_key(&mut self, key_id: KeyId, key_type: KeyType) -> Result<(), VsError> {
+            self.inner.generate_key(key_id, key_type)
+        }
     }
 
     /// Generate a 32-byte test key with sufficient entropy.
@@ -2480,5 +2712,95 @@ mod tests {
             material.iter().all(|&b| b == 0),
             "source material must be zeroized even on failure"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Audit crypto-failure fail-closed tests (H1/H2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn provision_key_crypto_failure_aborts_without_mutation() {
+        let mut mgr = KeyManager::new(FailingCrypto::new());
+        mgr.crypto().set_fail(true);
+        let meta = make_metadata(KeyId(0));
+        // A crypto failure during the audit chain step must abort the whole
+        // operation with CryptoError.
+        assert_eq!(
+            mgr.provision_key(KeyId(0), meta, &test_key(0xAA)),
+            Err(VsError::CryptoError)
+        );
+        // The slot must NOT have been mutated.
+        assert!(mgr.get_metadata(KeyId(0)).is_none());
+        assert!(!mgr.is_key_valid(KeyId(0), 1500));
+        assert_eq!(mgr.audit_count(), 0);
+        // After recovery the operation succeeds and the audit chain verifies.
+        mgr.crypto().set_fail(false);
+        mgr.provision_key(KeyId(0), meta, &test_key(0xAA))
+            .expect("provision after recovery");
+        assert_eq!(mgr.audit_count(), 1);
+        assert!(mgr.verify_audit_integrity().expect("verify"));
+    }
+
+    #[test]
+    fn rotate_key_crypto_failure_preserves_existing_key() {
+        let mut mgr = KeyManager::new(FailingCrypto::new());
+        let meta = make_metadata(KeyId(0));
+        mgr.provision_key(KeyId(0), meta, &test_key(0xAA)).unwrap();
+        mgr.crypto().set_fail(true);
+        // Rotation must fail closed: existing key material stays intact.
+        assert_eq!(
+            mgr.rotate_key(KeyId(0), &test_key(0xBB), 2000, None),
+            Err(VsError::CryptoError)
+        );
+        assert_eq!(mgr.get_metadata(KeyId(0)).unwrap().rotation_count, 0);
+        // The original key material must still be present and usable.
+        mgr.crypto().set_fail(false);
+        let mat = mgr.get_key_material(KeyId(0), 1500).expect("original key");
+        assert_eq!(mat, &test_key(0xAA));
+    }
+
+    #[test]
+    fn revoke_key_crypto_failure_aborts_without_mutation() {
+        let mut mgr = KeyManager::new(FailingCrypto::new());
+        let meta = make_metadata(KeyId(0));
+        mgr.provision_key(KeyId(0), meta, &test_key(0xAA)).unwrap();
+        mgr.crypto().set_fail(true);
+        assert_eq!(
+            mgr.revoke_key(KeyId(0), 2000),
+            Err(VsError::CryptoError)
+        );
+        // Slot must remain active, not revoked.
+        assert!(mgr.is_key_valid(KeyId(0), 1500));
+        mgr.crypto().set_fail(false);
+        assert!(mgr.get_key_material(KeyId(0), 1500).is_ok());
+    }
+
+    #[test]
+    fn generate_key_crypto_failure_aborts_without_mutation() {
+        let mut mgr = KeyManager::new(FailingCrypto::new());
+        mgr.crypto().set_fail(true);
+        let meta = make_metadata(KeyId(0));
+        assert_eq!(
+            mgr.generate_key(KeyId(0), meta),
+            Err(VsError::CryptoError)
+        );
+        assert!(mgr.get_metadata(KeyId(0)).is_none());
+        assert_eq!(mgr.audit_count(), 0);
+    }
+
+    #[test]
+    fn audit_count_never_advances_on_crypto_failure() {
+        // A crypto failure must never commit an audit entry: audit_count
+        // stays put and no zero-chain entry is left behind.
+        let mut mgr = KeyManager::new(FailingCrypto::new());
+        let meta = make_metadata(KeyId(0));
+        mgr.provision_key(KeyId(0), meta, &test_key(0xAA)).unwrap();
+        assert_eq!(mgr.audit_count(), 1);
+        mgr.crypto().set_fail(true);
+        let _ = mgr.rotate_key(KeyId(0), &test_key(0xBB), 2000, None);
+        assert_eq!(mgr.audit_count(), 1, "no audit entry committed on failure");
+        // Existing committed entries still verify.
+        mgr.crypto().set_fail(false);
+        assert!(mgr.verify_audit_integrity().expect("verify"));
     }
 }
