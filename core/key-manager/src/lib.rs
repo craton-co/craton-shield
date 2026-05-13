@@ -7,7 +7,7 @@
 //!
 //! # API stability
 //!
-//! Pre-1.0 (workspace version 0.7.0); see ROADMAP for the 1.0 stability
+//! Pre-1.0 (workspace version 0.7.1); see ROADMAP for the 1.0 stability
 //! commitment. The `KeyManager` type, its
 //! `provision_key` / `rotate_key` / `revoke_key` / `generate_key` /
 //! `verify_audit_integrity` methods, and the `KeyMetadata` / `AuditEntry`
