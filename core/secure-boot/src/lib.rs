@@ -597,11 +597,78 @@ pub enum BootVerificationOutcome {
     RequestRollback(VsError),
 }
 
+/// Persistable rollback-protection state for a [`BootVerifier`].
+///
+/// # Why this exists (security-critical)
+///
+/// Rollback protection and anti-replay are only meaningful if their
+/// state **survives a power cycle**. The relevant state is:
+///
+/// - `last_verified_timestamp` — anti-replay floor; a verification must
+///   present a strictly greater timestamp than any previous one.
+/// - `stage_versions` — per-PCR minimum accepted image version; an image
+///   whose `version` is below the recorded floor is a downgrade and is
+///   rejected.
+/// - `key_rotation_counter` — monotonic anti-replay counter bound into
+///   every [`BootVerifier::replace_pub_key_authorized`] authorization
+///   digest, so a captured rotation message cannot be replayed later.
+///
+/// A freshly constructed [`BootVerifier`] starts with an all-zero floor.
+/// If that zero floor is used on every boot, rollback protection and key
+/// rotation replay protection reset to nothing each power cycle and
+/// protect against nothing.
+///
+/// **The caller is responsible** for persisting this struct to
+/// non-volatile storage (an NV counter, monotonic fuse, or replay-safe
+/// flash region) after every successful verification / key rotation, and
+/// for re-seeding it via [`BootVerifier::new_persisted`] on the next
+/// boot. Treat the floor like an NV monotonic counter: it may only ever
+/// move forward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RollbackFloor {
+    /// Timestamp of the most recent successful verification, if any.
+    pub last_verified_timestamp: Option<u64>,
+    /// Per-PCR-index minimum accepted image version.
+    pub stage_versions: [u32; PCR_COUNT],
+    /// Monotonic counter consumed by authorized key rotation. Each
+    /// successful [`BootVerifier::replace_pub_key_authorized`] requires a
+    /// signature bound to the current value and then increments it.
+    pub key_rotation_counter: u64,
+}
+
+impl RollbackFloor {
+    /// An empty floor — equivalent to a device that has never recorded a
+    /// boot. Using this on a production boot disables rollback / replay
+    /// protection; prefer restoring a persisted floor via
+    /// [`BootVerifier::new_persisted`].
+    pub const EMPTY: Self = Self {
+        last_verified_timestamp: None,
+        stage_versions: [0; PCR_COUNT],
+        key_rotation_counter: 0,
+    };
+}
+
+impl Default for RollbackFloor {
+    fn default() -> Self {
+        Self::EMPTY
+    }
+}
+
 /// Boot chain verifier.
 ///
 /// Verifies a sequence of signed boot stage entries, extends PCR
 /// registers per-stage, and computes a domain-separated chain hash.
 /// Includes anti-replay protection via monotonic timestamp tracking.
+///
+/// # Persistence requirement
+///
+/// The rollback / anti-replay state ([`RollbackFloor`]) lives only in
+/// this struct and is **not** automatically persisted. For rollback
+/// protection to survive a power cycle the caller MUST persist
+/// [`Self::floor_for_persistence`] to non-volatile storage and restore it
+/// on the next boot via [`Self::new_persisted`]. A verifier built with
+/// [`Self::new`] starts from an empty floor and provides no cross-reboot
+/// rollback protection.
 pub struct BootVerifier<C: CryptoProvider> {
     crypto: C,
     pub_keys: [[u8; 65]; MAX_PUB_KEYS],
@@ -616,20 +683,70 @@ pub struct BootVerifier<C: CryptoProvider> {
     last_verified_timestamp: Option<u64>,
     /// Per-stage minimum required version for rollback protection.
     stage_versions: [u32; PCR_COUNT],
+    /// Monotonic anti-replay counter for authorized key rotation.
+    /// Bound into every key-rotation authorization digest and
+    /// incremented after each successful rotation.
+    key_rotation_counter: u64,
 }
 
 impl<C: CryptoProvider> BootVerifier<C> {
-    /// Create a new boot verifier with no registered keys and the given
-    /// failure policy. Use [`Self::register_pub_key`] to provision keys
-    /// before calling [`Self::verify_boot_chain`].
+    /// Create a new boot verifier with no registered keys, the given
+    /// failure policy, and an **empty** [`RollbackFloor`].
+    ///
+    /// # Security warning
+    ///
+    /// A verifier created with `new` starts from
+    /// [`RollbackFloor::EMPTY`]: rollback protection and key-rotation
+    /// replay protection therefore do **not** survive a power cycle. For
+    /// production use, restore the persisted floor with
+    /// [`Self::new_persisted`] instead. `new` is appropriate only for
+    /// first-ever provisioning, tests, or platforms with no rollback
+    /// threat model.
+    ///
+    /// Use [`Self::register_pub_key`] to provision keys before calling
+    /// [`Self::verify_boot_chain`].
     pub fn new(crypto: C, failure_policy: BootFailurePolicy) -> Self {
+        Self::new_persisted(crypto, failure_policy, RollbackFloor::EMPTY)
+    }
+
+    /// Create a boot verifier whose rollback / anti-replay state is
+    /// seeded from a [`RollbackFloor`] previously persisted to
+    /// non-volatile storage.
+    ///
+    /// This is the constructor production firmware should use: it carries
+    /// the downgrade floor, the anti-replay timestamp, and the key
+    /// rotation counter across a power cycle. After a successful
+    /// verification or key rotation, persist the updated floor via
+    /// [`Self::floor_for_persistence`] so the next boot can restore it.
+    pub fn new_persisted(
+        crypto: C,
+        failure_policy: BootFailurePolicy,
+        floor: RollbackFloor,
+    ) -> Self {
         Self {
             crypto,
             pub_keys: [[0u8; 65]; MAX_PUB_KEYS],
             registered_keys: 0,
             failure_policy,
-            last_verified_timestamp: None,
-            stage_versions: [0; PCR_COUNT],
+            last_verified_timestamp: floor.last_verified_timestamp,
+            stage_versions: floor.stage_versions,
+            key_rotation_counter: floor.key_rotation_counter,
+        }
+    }
+
+    /// Snapshot the current rollback / anti-replay state so the caller
+    /// can persist it to non-volatile storage.
+    ///
+    /// Persist the returned value after every successful
+    /// [`Self::verify_boot_chain`] and every successful
+    /// [`Self::replace_pub_key_authorized`], and restore it on the next
+    /// boot via [`Self::new_persisted`]. The floor is monotonic — never
+    /// write back a value older than the last persisted one.
+    pub fn floor_for_persistence(&self) -> RollbackFloor {
+        RollbackFloor {
+            last_verified_timestamp: self.last_verified_timestamp,
+            stage_versions: self.stage_versions,
+            key_rotation_counter: self.key_rotation_counter,
         }
     }
 
