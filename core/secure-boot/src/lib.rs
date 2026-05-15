@@ -34,6 +34,13 @@ use vs_types::VsError;
 /// could be mistaken for a valid chain hash.
 const CHAIN_HASH_DOMAIN: [u8; 32] = *b"vs-secure-boot-chain-hash-v1\x00\x00\x00\x00";
 
+/// Domain separation tag for key-rotation authorization digests.
+///
+/// Mixed into the pre-image signed by an authorizing key so a rotation
+/// authorization signature cannot be confused with a [`BootEntry`]
+/// signature or any other protocol's signed input.
+const KEY_ROTATION_AUTH_DOMAIN: &[u8; 25] = b"vs-secure-boot-keyrot-v1\x00";
+
 /// Number of PCR registers.
 const PCR_COUNT: usize = 8;
 
@@ -816,10 +823,67 @@ impl<C: CryptoProvider> BootVerifier<C> {
         Ok(())
     }
 
+    /// The monotonic counter the next [`Self::replace_pub_key_authorized`]
+    /// authorization signature must be bound to.
+    ///
+    /// A rotation authorizer signs a digest over this exact value (see
+    /// [`Self::key_rotation_authorization_digest`]). After a successful
+    /// rotation the counter is incremented, so the just-used signature can
+    /// never be replayed. Persist the counter as part of
+    /// [`Self::floor_for_persistence`].
+    pub fn key_rotation_counter(&self) -> u64 {
+        self.key_rotation_counter
+    }
+
+    /// Compute the 32-byte digest an authorizer must sign to rotate a key.
+    ///
+    /// The pre-image binds, in order:
+    ///
+    /// 1. [`KEY_ROTATION_AUTH_DOMAIN`] — 25-byte domain separation tag
+    /// 2. `rotation_counter` as big-endian `u64` — 8 bytes (anti-replay)
+    /// 3. `slot` as big-endian `u32` — 4 bytes (cross-slot binding)
+    /// 4. `new_key` — 65 bytes
+    ///
+    /// `rotation_counter` MUST be the verifier's current
+    /// [`Self::key_rotation_counter`] at signing time. Because the counter
+    /// is monotonic and advanced on every successful rotation, a captured
+    /// authorization signature is bound to a single counter value and
+    /// cannot be replayed to re-apply a stale (possibly since-compromised)
+    /// key.
+    pub fn key_rotation_authorization_digest(
+        slot: usize,
+        new_key: &[u8; 65],
+        rotation_counter: u64,
+        crypto: &impl CryptoProvider,
+    ) -> Result<[u8; 32], VsError> {
+        // Pre-image: [domain(25) || counter_be_u64(8) || slot_be_u32(4) || key(65)]
+        let mut digest_input = [0u8; 25 + 8 + 4 + 65];
+        digest_input[..25].copy_from_slice(KEY_ROTATION_AUTH_DOMAIN);
+        digest_input[25..33].copy_from_slice(&rotation_counter.to_be_bytes());
+        digest_input[33..37].copy_from_slice(&(slot as u32).to_be_bytes());
+        digest_input[37..].copy_from_slice(new_key);
+        let mut digest = [0u8; 32];
+        crypto.sha256(&digest_input, &mut digest)?;
+        zeroize_buf(&mut digest_input);
+        Ok(digest)
+    }
+
     /// Replace a public key with authorization.
     ///
-    /// Requires a valid signature from an existing registered key over the
-    /// new key bytes, proving the caller has authority to perform key rotation.
+    /// Requires a valid signature from a **different** existing registered
+    /// key over the rotation authorization digest (see
+    /// [`Self::key_rotation_authorization_digest`]).
+    ///
+    /// # Anti-replay
+    ///
+    /// The signed digest binds the verifier's monotonic
+    /// [`Self::key_rotation_counter`]. The authorizer must sign a digest
+    /// computed with the counter's current value; on success the counter
+    /// is advanced, permanently invalidating that signature. A rotation
+    /// message captured off the wire therefore cannot be re-applied later
+    /// to revert a slot to a previously-authorized key. Persist the
+    /// updated [`Self::floor_for_persistence`] after a successful call so
+    /// the counter survives a power cycle.
     pub fn replace_pub_key_authorized(
         &mut self,
         slot: usize,
@@ -843,12 +907,15 @@ impl<C: CryptoProvider> BootVerifier<C> {
         if auth_idx >= MAX_PUB_KEYS || (self.registered_keys & (1 << auth_idx)) == 0 {
             return Err(VsError::AuthenticationFailure);
         }
-        // Include slot index in digest to prevent cross-slot replay
-        let mut digest_input = [0u8; 4 + 65]; // slot(4) + key(65)
-        digest_input[..4].copy_from_slice(&(slot as u32).to_be_bytes());
-        digest_input[4..].copy_from_slice(new_key);
-        let mut digest = [0u8; 32];
-        self.crypto.sha256(&digest_input, &mut digest)?;
+        // Bind slot index AND the monotonic rotation counter into the
+        // digest. The counter makes a captured authorization signature
+        // single-use: replaying it after the counter has advanced fails.
+        let digest = Self::key_rotation_authorization_digest(
+            slot,
+            new_key,
+            self.key_rotation_counter,
+            &self.crypto,
+        )?;
         // Verify authorization signature
         let auth_key = &self.pub_keys[auth_idx];
         let verified = self
@@ -857,9 +924,11 @@ impl<C: CryptoProvider> BootVerifier<C> {
         if !verified {
             return Err(VsError::AuthenticationFailure);
         }
-        // Authorized - perform the replacement
+        // Authorized - perform the replacement and advance the monotonic
+        // anti-replay counter so this signature can never be reused.
         self.pub_keys[slot] = *new_key;
         self.registered_keys |= 1 << slot;
+        self.key_rotation_counter = self.key_rotation_counter.saturating_add(1);
         Ok(())
     }
 
@@ -2403,6 +2472,74 @@ mod tests {
             verifier.replace_pub_key_authorized(0, &new_key, KeyId::new(0), &dummy_sig),
             Err(VsError::PolicyViolation),
         );
+    }
+
+    /// Authorized key rotation with a valid counter-bound signature
+    /// succeeds and advances the monotonic rotation counter.
+    #[test]
+    fn replace_pub_key_authorized_success_and_counter_advances() {
+        let mut crypto = SoftwareCryptoProvider::default();
+        let key_a = [0x42; 32];
+        let key_b = [0x99; 32];
+        crypto.set_key(KeyId(0), &key_a).unwrap();
+        crypto.set_key(KeyId(1), &key_b).unwrap();
+
+        let mut pk_a = [0u8; 65];
+        pk_a[0] = 0x04;
+        pk_a[1..33].copy_from_slice(&key_a);
+        let mut pk_b = [0u8; 65];
+        pk_b[0] = 0x04;
+        pk_b[1..33].copy_from_slice(&key_b);
+
+        // Pre-compute the counter-0-bound authorization signature using a
+        // standalone crypto handle (same key material as the verifier's).
+        let new_key = [0x07u8; 65];
+        let signer = {
+            let mut s = SoftwareCryptoProvider::default();
+            s.set_key(KeyId(0), &key_a).unwrap();
+            s.set_key(KeyId(1), &key_b).unwrap();
+            s
+        };
+        let digest = BootVerifier::<SoftwareCryptoProvider>::key_rotation_authorization_digest(
+            0, &new_key, 0, &signer,
+        )
+        .unwrap();
+        let mut sig = [0u8; 64];
+        signer.sign_p256(KeyId(1), &digest, &mut sig).unwrap();
+
+        let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
+        verifier.register_pub_key(KeyId(0), &pk_a).unwrap();
+        verifier.register_pub_key(KeyId(1), &pk_b).unwrap();
+        assert_eq!(verifier.key_rotation_counter(), 0);
+
+        verifier
+            .replace_pub_key_authorized(0, &new_key, KeyId(1), &sig)
+            .unwrap();
+        assert_eq!(verifier.key_rotation_counter(), 1);
+
+        // The same signature is now stale: it is bound to counter 0 but
+        // the verifier expects counter 1. Replay must be rejected.
+        assert_eq!(
+            verifier.replace_pub_key_authorized(0, &new_key, KeyId(1), &sig),
+            Err(VsError::AuthenticationFailure),
+        );
+    }
+
+    /// The rotation counter is seeded from a persisted [`RollbackFloor`],
+    /// so a captured signature bound to a pre-reboot counter value cannot
+    /// be replayed after the verifier is restored on the next boot.
+    #[test]
+    fn key_rotation_counter_survives_persistence() {
+        let crypto = test_crypto();
+        let floor = RollbackFloor {
+            last_verified_timestamp: Some(500),
+            stage_versions: [0; PCR_COUNT],
+            key_rotation_counter: 9,
+        };
+        let verifier =
+            BootVerifier::new_persisted(crypto, BootFailurePolicy::Halt, floor);
+        assert_eq!(verifier.key_rotation_counter(), 9);
+        assert_eq!(verifier.floor_for_persistence(), floor);
     }
 
     // ---- Empty PCR selection rejected ----
