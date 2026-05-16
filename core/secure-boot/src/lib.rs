@@ -1088,6 +1088,23 @@ impl<C: CryptoProvider> BootVerifier<C> {
     /// - [`BootFailurePolicy::Halt`] -> [`BootVerificationOutcome::Halt`]
     /// - [`BootFailurePolicy::ReportOnly`] -> [`BootVerificationOutcome::ReportAndContinue`]
     /// - [`BootFailurePolicy::RequestRollback`] -> [`BootVerificationOutcome::RequestRollback`]
+    ///
+    /// # Rollback memory on the report-and-continue path
+    ///
+    /// The rollback / anti-replay floor (`stage_versions`,
+    /// `last_verified_timestamp`) is advanced **only** when
+    /// [`Self::verify_boot_chain`] returns `Ok` — i.e. when the *entire*
+    /// chain verified. When verification fails, the floor is left
+    /// untouched even under [`BootFailurePolicy::ReportOnly`] or
+    /// [`BootFailurePolicy::RequestRollback`].
+    ///
+    /// This is intentional and fail-closed: a chain that did not verify
+    /// must not be allowed to raise the downgrade floor. But it means a
+    /// `ReportOnly` deployment that boots a failed/old image anyway keeps
+    /// **no record** that it did so — the next boot sees the same
+    /// pre-failure floor. Callers that continue booting on failure must
+    /// not assume any rollback state was recorded; if they need to track
+    /// such boots they must do so out of band.
     pub fn verify_boot_chain_with_policy(
         &mut self,
         entries: &[BootEntry],
