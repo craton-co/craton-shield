@@ -97,11 +97,10 @@ are rejected with `VsError::PolicyViolation`.
 
 ## Feature Flags
 
-- `software-tpm` — enable the `SoftwareTpm` type. **Refused in release
-  builds** by a `compile_error!`; intended for tests and simulation
-  only.
-
-See [docs/feature-flags.md](../../docs/feature-flags.md) for the full workspace feature reference.
+- `software-tpm` — enable the `SoftwareTpm` type. Rejected by a
+  `compile_error!` in release builds (`not(debug_assertions)` and
+  `not(test)`); it remains available in debug and test builds. Intended
+  for tests and simulation only.
 
 ## License
 
