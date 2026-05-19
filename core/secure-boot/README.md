@@ -74,26 +74,51 @@ this crate as **software-only** primitives.
 
 ```rust,ignore
 use vs_crypto::{CryptoProvider, KeyId};
-use vs_secure_boot::{BootEntry, BootFailurePolicy, BootStage, BootVerifier};
+use vs_secure_boot::{BootEntry, BootFailurePolicy, BootVerifier, RollbackFloor};
 
 fn verify<C: CryptoProvider>(
     crypto: C,
     pub_key: &[u8; 65],
     boot_entries: &[BootEntry],
     timestamp_us: u64,
-) -> Result<(), vs_types::VsError> {
-    let mut verifier = BootVerifier::new(crypto, BootFailurePolicy::Halt);
+    // Floor restored from non-volatile storage (see "Rollback persistence").
+    persisted_floor: RollbackFloor,
+) -> Result<RollbackFloor, vs_types::VsError> {
+    let mut verifier =
+        BootVerifier::new_persisted(crypto, BootFailurePolicy::Halt, persisted_floor);
     verifier.register_pub_key(KeyId(0), pub_key)?;
 
     let attestation = verifier.verify_boot_chain(boot_entries, timestamp_us)?;
     let _ = attestation.chain_hash;
-    Ok(())
+
+    // Persist the advanced floor before the next power cycle.
+    Ok(verifier.floor_for_persistence())
 }
 ```
 
 The chain MUST begin at `BootStage::Bootloader` and stages MUST be
 contiguous (no skipping `Hypervisor` or `Os`). Non-contiguous chains
 are rejected with `VsError::PolicyViolation`.
+
+## Rollback persistence
+
+Rollback protection and anti-replay only work if their state survives a
+power cycle. `BootVerifier` keeps that state (the downgrade floor, the
+anti-replay timestamp, and the key-rotation counter) in memory only.
+
+Production firmware MUST:
+
+1. Restore the previously saved `RollbackFloor` and build the verifier
+   with `BootVerifier::new_persisted` (not `new`, which starts from an
+   empty floor and provides no cross-reboot protection).
+2. After every successful `verify_boot_chain` and every successful
+   `replace_pub_key_authorized`, write `BootVerifier::floor_for_persistence`
+   back to non-volatile storage (an NV monotonic counter or replay-safe
+   flash region). The floor is monotonic — never persist an older value.
+
+Authorized key rotation binds the verifier's monotonic
+`key_rotation_counter` into the authorization digest, so a captured
+rotation message cannot be replayed once the counter has advanced.
 
 ## Feature Flags
 
