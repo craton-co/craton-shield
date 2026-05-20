@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #![cfg_attr(not(feature = "std"), no_std)]
-#![forbid(unsafe_code)]
+// `deny` (not `forbid`) so the small, audited `#[allow(unsafe_code)]` FFI
+// blocks in `file_storage.rs` (`whoami`'s `GetUserNameW`, `mlock`/`munlock`)
+// can opt in locally. `forbid` cannot be overridden and made the `std`
+// feature uncompilable on every platform.
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 //! Persistent storage abstraction for `Craton Shield`.

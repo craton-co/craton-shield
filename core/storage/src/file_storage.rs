@@ -533,7 +533,8 @@ fn whoami() -> Result<String, VsError> {
 
     // `size` includes the null terminator; exclude it when converting.
     let len = (size as usize).saturating_sub(1);
-    let username = std::os::windows::ffi::OsStringExt::from_wide(&buf[..len]);
+    let username =
+        <std::ffi::OsString as std::os::windows::ffi::OsStringExt>::from_wide(&buf[..len]);
     let username = username.into_string().map_err(|_| VsError::StorageError)?;
 
     // Defence-in-depth: validate the username contains only characters safe
