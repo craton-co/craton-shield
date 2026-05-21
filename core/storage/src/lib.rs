@@ -190,11 +190,16 @@ impl RamStorageProvider {
         self.entries.iter().position(|e| !e.active)
     }
 
-    /// Recompute `count` from the entries array (debug-only sanity check).
-    #[cfg(debug_assertions)]
+    /// Recompute `count` from the entries array and assert it matches the
+    /// cached field.
+    ///
+    /// This invariant check is **unconditional** (not `debug_assertions`-gated)
+    /// so that a `count` desync is caught in release builds too. The scan is
+    /// O(`RAM_MAX_ENTRIES`) over a small fixed array (<= 256 entries) and only
+    /// runs on mutating operations, so the cost is negligible.
     fn assert_count_consistent(&self) {
         let actual = self.entries.iter().filter(|e| e.active).count();
-        debug_assert_eq!(
+        assert_eq!(
             self.count, actual,
             "RamStorageProvider::count desync: field={}, actual={}",
             self.count, actual
@@ -247,7 +252,6 @@ impl StorageProvider for RamStorageProvider {
         entry.value_len = data.len() as u8;
         entry.active = true;
         self.count += 1;
-        #[cfg(debug_assertions)]
         self.assert_count_consistent();
         Ok(())
     }
@@ -255,8 +259,11 @@ impl StorageProvider for RamStorageProvider {
     fn delete(&mut self, key: &[u8]) -> Result<(), VsError> {
         if let Some(idx) = self.find_index(key) {
             self.entries[idx].secure_clear();
-            self.count -= 1;
-            #[cfg(debug_assertions)]
+            // Use `saturating_sub` so that a desynced `count` can never wrap
+            // to `usize::MAX` in a release build (the `release` profile does
+            // not enable `overflow-checks`). The unconditional
+            // `assert_count_consistent` below still catches the desync.
+            self.count = self.count.saturating_sub(1);
             self.assert_count_consistent();
         }
         Ok(())
