@@ -29,7 +29,7 @@ capacity-large = []
 capacity-xl = []
 
 [dev-dependencies]
-vs-crypto = { path = "../crypto", features = ["mock-hsm"] }
+vs-crypto = { workspace = true, features = ["mock-hsm"] }
 
 [lints]
 workspace = true
