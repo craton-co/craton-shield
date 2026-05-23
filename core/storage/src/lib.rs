@@ -401,6 +401,17 @@ const ENC_NONCE_LEN: usize = 12;
 #[cfg(any(feature = "encrypted", test))]
 const ENC_TAG_LEN: usize = 16;
 
+/// Reserved storage key under which [`EncryptedStorageProvider`] persists its
+/// AES-GCM nonce counter when constructed via
+/// [`EncryptedStorageProvider::new_persistent`].
+///
+/// This key is owned by the wrapper. Callers must not write to it directly;
+/// [`EncryptedStorageProvider::write`] rejects it with [`VsError::InvalidInput`]
+/// when the provider is in persistent mode, so a caller cannot accidentally
+/// corrupt the counter.
+#[cfg(any(feature = "encrypted", test))]
+const ENC_NONCE_KEY: &[u8] = b"\x00vs-storage::enc-nonce";
+
 /// Storage provider wrapper that encrypts all values before writing and
 /// decrypts them on read, using AES-GCM via a [`CryptoProvider`].
 ///
@@ -429,6 +440,12 @@ pub struct EncryptedStorageProvider<'a, S: StorageProvider, C: vs_crypto::Crypto
     crypto: &'a C,
     key_id: vs_crypto::KeyId,
     nonce_counter: u64,
+    /// When `true`, the nonce counter is persisted to the inner store under
+    /// [`ENC_NONCE_KEY`] before each value write, and is reloaded from there
+    /// on construction. This removes the caller-trusted "persist the counter
+    /// yourself" burden and makes nonce reuse after a restart impossible
+    /// (fail-closed).
+    persistent: bool,
 }
 
 #[cfg(any(feature = "encrypted", test))]
@@ -447,15 +464,64 @@ impl<'a, S: StorageProvider, C: vs_crypto::CryptoProvider> EncryptedStorageProvi
     /// # Safety note
     ///
     /// A `nonce_start` of 0 is valid but may indicate the caller forgot to
-    /// restore a persisted counter. In production, always pass the
-    /// last-known counter value (or higher) to prevent nonce reuse.
+    /// restore a persisted counter. In production, **prefer
+    /// [`new_persistent`](Self::new_persistent)**, which persists the counter
+    /// automatically and makes nonce reuse after a restart impossible.
     pub fn new(inner: S, crypto: &'a C, key_id: vs_crypto::KeyId, nonce_start: u64) -> Self {
         Self {
             inner,
             crypto,
             key_id,
             nonce_counter: nonce_start,
+            persistent: false,
         }
+    }
+
+    /// Create an encrypted storage provider whose nonce counter is **persisted
+    /// in the inner store itself** under a reserved key ([`ENC_NONCE_KEY`]).
+    ///
+    /// This is the recommended constructor. Unlike [`new`](Self::new), it does
+    /// not push the critical "persist the counter yourself" burden onto the
+    /// caller:
+    ///
+    /// * On construction the counter is **loaded** from the inner store. If no
+    ///   counter is present (fresh store) it starts at 0.
+    /// * On every [`write`](StorageProvider::write) the *incremented* counter
+    ///   is **persisted to the inner store before** the encrypted value is
+    ///   written. The persisted counter is therefore always greater than or
+    ///   equal to the highest nonce ever used for an actual value write.
+    /// * After a crash or restart, reconstructing with `new_persistent` reloads
+    ///   the persisted counter, so a nonce can **never** be reused — even if
+    ///   the process died between the counter write and the value write
+    ///   (fail-closed: at worst a nonce is skipped, never repeated).
+    ///
+    /// # Errors
+    ///
+    /// * [`VsError::IntegrityFailure`] – the stored counter is corrupt (not an
+    ///   8-byte little-endian value).
+    /// * Any error from the inner [`StorageProvider::read`] other than
+    ///   [`VsError::NotFound`].
+    pub fn new_persistent(
+        inner: S,
+        crypto: &'a C,
+        key_id: vs_crypto::KeyId,
+    ) -> Result<Self, VsError> {
+        let nonce_counter = {
+            let mut buf = [0u8; 8];
+            match inner.read(ENC_NONCE_KEY, &mut buf) {
+                Ok(8) => u64::from_le_bytes(buf),
+                Ok(_) => return Err(VsError::IntegrityFailure),
+                Err(VsError::NotFound) => 0,
+                Err(e) => return Err(e),
+            }
+        };
+        Ok(Self {
+            inner,
+            crypto,
+            key_id,
+            nonce_counter,
+            persistent: true,
+        })
     }
 
     /// Return the current nonce counter for persistence.
@@ -495,6 +561,11 @@ impl<'a, S: StorageProvider, C: vs_crypto::CryptoProvider> StorageProvider
     for EncryptedStorageProvider<'a, S, C>
 {
     fn read(&self, key: &[u8], buf: &mut [u8]) -> Result<usize, VsError> {
+        // The reserved nonce-counter key is wrapper-internal and is not an
+        // encrypted value; treat it as absent for callers.
+        if self.persistent && key == ENC_NONCE_KEY {
+            return Err(VsError::NotFound);
+        }
         // Read the encrypted blob: nonce(12) || ciphertext(N) || tag(16)
         let mut encrypted = [0u8; MAX_VALUE_LEN];
         let enc_len = self.inner.read(key, &mut encrypted)?;
@@ -536,9 +607,19 @@ impl<'a, S: StorageProvider, C: vs_crypto::CryptoProvider> StorageProvider
     /// before either of those operations can fail. **Therefore, if the
     /// underlying `aes_gcm_encrypt` call or the inner `write` returns an
     /// error, the nonce counter has still advanced.** The failed nonce is
-    /// permanently burned — it will never be reused, even after process
-    /// restart, *provided* the caller persists `nonce_counter()` after
-    /// every write attempt (success or failure).
+    /// permanently burned — it will never be reused.
+    ///
+    /// In **persistent mode** (constructed via
+    /// [`new_persistent`](Self::new_persistent)) the incremented counter is
+    /// written to the inner store **before** the encrypted value, so the
+    /// persisted counter is always greater than or equal to the highest
+    /// nonce used for a value write. A crash between the two writes can only
+    /// *skip* a nonce, never reuse one. If the counter persistence write
+    /// fails the value write is **not** attempted and the error is returned.
+    ///
+    /// In non-persistent mode (constructed via [`new`](Self::new)) the caller
+    /// is responsible for persisting `nonce_counter()` after every write
+    /// attempt; this is error-prone and `new_persistent` should be preferred.
     ///
     /// This is deliberate: reusing an AES-GCM nonce under the same key
     /// destroys both confidentiality (XOR of two plaintexts is recoverable
@@ -546,16 +627,30 @@ impl<'a, S: StorageProvider, C: vs_crypto::CryptoProvider> StorageProvider
     /// extracted, allowing arbitrary forgery). Burning nonces on failure
     /// is the IND-CCA1 safety choice; the cost is at most `2^64`
     /// usable writes per key, which is unreachable in practice.
-    ///
-    /// Callers that need to detect this case can compare
-    /// `nonce_counter()` before and after the call.
     fn write(&mut self, key: &[u8], data: &[u8]) -> Result<(), VsError> {
+        // In persistent mode the reserved nonce-counter key is owned by this
+        // wrapper; reject caller writes to it so the counter cannot be
+        // corrupted (which would risk nonce reuse on the next restart).
+        if self.persistent && key == ENC_NONCE_KEY {
+            return Err(VsError::InvalidInput);
+        }
+
         let overhead = ENC_NONCE_LEN + ENC_TAG_LEN;
         if data.len() + overhead > MAX_VALUE_LEN {
             return Err(VsError::InvalidInput);
         }
 
         let nonce = self.next_nonce()?;
+
+        // Persist the advanced counter BEFORE encrypting/writing the value so
+        // that the on-disk counter can never lag the nonce actually used.
+        // A failure here aborts the write (the burned nonce is acceptable;
+        // a reused one is not).
+        if self.persistent {
+            let counter_bytes = self.nonce_counter.to_le_bytes();
+            self.inner.write(ENC_NONCE_KEY, &counter_bytes)?;
+        }
+
         let mut ct = [0u8; MAX_VALUE_LEN];
         let mut tag = [0u8; ENC_TAG_LEN];
         self.crypto.aes_gcm_encrypt(
@@ -578,18 +673,42 @@ impl<'a, S: StorageProvider, C: vs_crypto::CryptoProvider> StorageProvider
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<(), VsError> {
+        // Refuse to delete the reserved nonce-counter key: dropping it would
+        // reset the persisted counter to 0 while ciphertexts remain, risking
+        // nonce reuse on the next write.
+        if self.persistent && key == ENC_NONCE_KEY {
+            return Err(VsError::InvalidInput);
+        }
         self.inner.delete(key)
     }
 
     fn contains(&self, key: &[u8]) -> bool {
+        // The reserved nonce-counter key is wrapper-internal; report it absent.
+        if self.persistent && key == ENC_NONCE_KEY {
+            return false;
+        }
         self.inner.contains(key)
     }
 
     fn for_each_key(&self, f: &mut dyn FnMut(&[u8]) -> bool) -> Result<(), VsError> {
-        self.inner.for_each_key(f)
+        if self.persistent {
+            // Hide the reserved nonce-counter key: it is wrapper-internal
+            // bookkeeping, not a user value.
+            self.inner.for_each_key(&mut |k| {
+                if k == ENC_NONCE_KEY {
+                    return true;
+                }
+                f(k)
+            })
+        } else {
+            self.inner.for_each_key(f)
+        }
     }
 
     fn clear_all(&mut self) -> Result<(), VsError> {
+        // In persistent mode this also erases the stored nonce counter. That
+        // is correct: clearing the store removes every ciphertext, so the
+        // counter may safely restart from 0 with no risk of nonce reuse.
         self.inner.clear_all()
     }
 }
@@ -1088,6 +1207,60 @@ mod tests {
             assert_eq!(enc.nonce_counter(), 1);
             enc.write(b"b", b"2").unwrap();
             assert_eq!(enc.nonce_counter(), 2);
+        }
+
+        #[test]
+        fn encrypted_persistent_counter_survives_reconstruction() {
+            let (crypto, store) = setup();
+            let mut enc =
+                EncryptedStorageProvider::new_persistent(store, &crypto, KeyId(0)).unwrap();
+            enc.write(b"a", b"1").unwrap();
+            enc.write(b"b", b"2").unwrap();
+            assert_eq!(enc.nonce_counter(), 2);
+
+            // Reconstruct from the same inner store: the counter must reload,
+            // never restarting at 0 (which would reuse nonces).
+            let inner = enc.inner;
+            let enc2 =
+                EncryptedStorageProvider::new_persistent(inner, &crypto, KeyId(0)).unwrap();
+            assert_eq!(enc2.nonce_counter(), 2);
+        }
+
+        #[test]
+        fn encrypted_persistent_reserved_key_is_hidden() {
+            let (crypto, store) = setup();
+            let mut enc =
+                EncryptedStorageProvider::new_persistent(store, &crypto, KeyId(0)).unwrap();
+            enc.write(b"real", b"v").unwrap();
+
+            // Reserved key must be invisible/inaccessible to callers.
+            assert!(!enc.contains(ENC_NONCE_KEY));
+            let mut buf = [0u8; 64];
+            assert_eq!(enc.read(ENC_NONCE_KEY, &mut buf), Err(VsError::NotFound));
+            assert_eq!(enc.write(ENC_NONCE_KEY, b"x"), Err(VsError::InvalidInput));
+            assert_eq!(enc.delete(ENC_NONCE_KEY), Err(VsError::InvalidInput));
+
+            let mut keys: Vec<Vec<u8>> = Vec::new();
+            enc.for_each_key(&mut |k| {
+                keys.push(k.to_vec());
+                true
+            })
+            .unwrap();
+            assert_eq!(keys, vec![b"real".to_vec()]);
+        }
+
+        #[test]
+        fn encrypted_persistent_roundtrip_after_reload() {
+            let (crypto, store) = setup();
+            let mut enc =
+                EncryptedStorageProvider::new_persistent(store, &crypto, KeyId(0)).unwrap();
+            enc.write(b"k", b"secret").unwrap();
+            let inner = enc.inner;
+            let enc2 =
+                EncryptedStorageProvider::new_persistent(inner, &crypto, KeyId(0)).unwrap();
+            let mut buf = [0u8; 64];
+            let len = enc2.read(b"k", &mut buf).unwrap();
+            assert_eq!(&buf[..len], b"secret");
         }
     }
 }
