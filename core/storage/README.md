@@ -50,7 +50,7 @@ enc.write(b"secret.key", b"plaintext-value")?;
 
 ## Feature Flags
 
-See [feature-flags.md](../docs/feature-flags.md) for the full workspace feature reference.
+See [feature-flags.md](../../docs/feature-flags.md) for the full workspace feature reference.
 
 ## License
 
