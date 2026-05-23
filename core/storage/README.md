@@ -18,13 +18,17 @@ embedded use. A `RamStorageProvider` is included for testing, and a
 
 ## Usage
 
-```rust
+```rust,no_run
 use vs_storage::{StorageProvider, RamStorageProvider};
+use vs_types::VsError;
 
-let mut store = RamStorageProvider::new();
-store.write(b"config.key", b"value")?;
-let mut buf = [0u8; 64];
-let len = store.read(b"config.key", &mut buf)?;
+fn example() -> Result<(), VsError> {
+    let mut store = RamStorageProvider::new();
+    store.write(b"config.key", b"value")?;
+    let mut buf = [0u8; 64];
+    let _len = store.read(b"config.key", &mut buf)?;
+    Ok(())
+}
 ```
 
 ### Encrypted storage (requires `encrypted` feature)
@@ -36,15 +40,18 @@ feature is enabled (pulls in `vs-crypto`):
 ```rust,ignore
 // Cargo.toml: vs-storage = { version = "0.7", features = ["encrypted"] }
 use vs_storage::{EncryptedStorageProvider, RamStorageProvider, StorageProvider};
-use vs_crypto::{KeyId, SoftwareCryptoProvider};
+use vs_crypto::{KeyId, RustCryptoProvider};
 
-let mut crypto = SoftwareCryptoProvider::default();
-crypto.set_key(KeyId(0), &[0x42u8; 16])?;
+let mut crypto = RustCryptoProvider::default();
+// AES-256-GCM requires a 32-byte key. The real `RustCryptoProvider`
+// rejects any other length with `VsError::InvalidInput`.
+crypto.set_key(KeyId(0), &[0x42u8; 32])?;
 
 let inner = RamStorageProvider::new();
-// `nonce_start` MUST be greater than any previously used nonce for this key;
-// persist `enc.nonce_counter()` after each write and restore it on next boot.
-let mut enc = EncryptedStorageProvider::new(inner, &crypto, KeyId(0), 0);
+// `new_persistent` stores the AES-GCM nonce counter inside `inner` under a
+// reserved key, so it is reloaded automatically on the next boot and a nonce
+// can never be reused. Prefer it over `new(.., nonce_start)`.
+let mut enc = EncryptedStorageProvider::new_persistent(inner, &crypto, KeyId(0))?;
 enc.write(b"secret.key", b"plaintext-value")?;
 ```
 
