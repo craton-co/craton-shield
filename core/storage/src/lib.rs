@@ -1221,8 +1221,7 @@ mod tests {
             // Reconstruct from the same inner store: the counter must reload,
             // never restarting at 0 (which would reuse nonces).
             let inner = enc.inner;
-            let enc2 =
-                EncryptedStorageProvider::new_persistent(inner, &crypto, KeyId(0)).unwrap();
+            let enc2 = EncryptedStorageProvider::new_persistent(inner, &crypto, KeyId(0)).unwrap();
             assert_eq!(enc2.nonce_counter(), 2);
         }
 
@@ -1256,8 +1255,7 @@ mod tests {
                 EncryptedStorageProvider::new_persistent(store, &crypto, KeyId(0)).unwrap();
             enc.write(b"k", b"secret").unwrap();
             let inner = enc.inner;
-            let enc2 =
-                EncryptedStorageProvider::new_persistent(inner, &crypto, KeyId(0)).unwrap();
+            let enc2 = EncryptedStorageProvider::new_persistent(inner, &crypto, KeyId(0)).unwrap();
             let mut buf = [0u8; 64];
             let len = enc2.read(b"k", &mut buf).unwrap();
             assert_eq!(&buf[..len], b"secret");

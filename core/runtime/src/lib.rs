@@ -112,15 +112,19 @@ pub enum SubsystemStatus {
 // RouteOutcome
 // ---------------------------------------------------------------------------
 
-/// Outcome of a [`CratonShield::route_alert`] call.
+/// Audit-trail outcome of a [`CratonShield::route_alert`] call.
 ///
 /// `route_alert` can quietly *lose* the alert if the underlying event log
 /// has failed repeatedly: after `MAX_LOG_FAILURES_BEFORE_FAILED` (5)
 /// consecutive append failures the platform sets `initialized = false` to
 /// prevent further operation without a functioning audit trail.  Callers
-/// that care about audit-trail integrity should inspect this outcome
-/// (returned by `route_alert` directly, or read via
-/// [`CratonShield::last_route_outcome`]).
+/// that care about audit-trail integrity should read this outcome via
+/// [`CratonShield::last_route_outcome`].
+///
+/// As of audit F-RM-12 `route_alert` itself returns a [`RouteResult`]
+/// (per-call sink backpressure); `RouteOutcome` remains the canonical
+/// audit-trail-integrity signal and is recorded internally on every
+/// `route_alert` invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub enum RouteOutcome {
@@ -133,6 +137,52 @@ pub enum RouteOutcome {
     /// Alert append failed and the platform has been disabled (audit
     /// trail can no longer be trusted).
     Dropped,
+}
+
+// ---------------------------------------------------------------------------
+// RouteResult
+// ---------------------------------------------------------------------------
+
+/// Backpressure-oriented outcome of a [`CratonShield::route_alert`] call.
+///
+/// Where [`RouteOutcome`] reports audit-trail health (did the append succeed
+/// and is the platform still trusted?), `RouteResult` reports *downstream
+/// sink* state so addon crates can surface per-call backpressure to operators
+/// (audit finding F-RM-12).  The two enums are orthogonal — an alert can be
+/// `Routed` (sink accepted it) while the platform is still
+/// `LoggedButPlatformDegraded`, and conversely a `Dropped` here signals an
+/// overwritten older alert in the event-log ring buffer even when the
+/// underlying append returned `Ok` (the new entry made it in by displacing
+/// an older one).
+///
+/// # Today
+///
+/// The current event-log implementation never refuses an append outright
+/// (the ring buffer wraps), so `Throttled` is reserved for future rate-limit
+/// integration and is not emitted by the stock orchestrator.  `Dropped` is
+/// emitted whenever the per-append `event_logger.overflow_count()` advances —
+/// i.e. an older alert was overwritten to make room.  `Routed` covers the
+/// nominal path.
+///
+/// Marked `#[non_exhaustive]` so future variants (e.g. `Deferred`,
+/// `BackpressureWarning`) can be added without a major version bump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+#[non_exhaustive]
+pub enum RouteResult {
+    /// Alert was accepted by the downstream sink without displacing an
+    /// older entry and without hitting any rate limit.
+    Routed,
+    /// Alert was accepted but an older queued alert was overwritten to make
+    /// room (event-log ring buffer wrapped on this append).  Operators
+    /// should treat this as an audit-completeness signal: the *current*
+    /// alert is logged, but at least one historical alert has fallen off
+    /// the end of the in-memory ring.
+    Dropped,
+    /// Alert was rejected by a downstream rate limiter and not routed.
+    /// Reserved for future use — the stock orchestrator does not emit this
+    /// variant today.
+    Throttled,
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,15 +1158,23 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
     ///
     /// # Returns
     ///
-    /// A [`RouteOutcome`] describing the result of the append:
-    /// - [`RouteOutcome::Logged`] -- the alert was appended cleanly.
-    /// - [`RouteOutcome::LoggedButPlatformDegraded`] -- the alert was
-    ///   appended but the event-log subsystem has accumulated failures
-    ///   short of the disable threshold; callers should consider
-    ///   raising an out-of-band warning.
-    /// - [`RouteOutcome::Dropped`] -- the append failed and the platform
-    ///   has been disabled. Callers can detect this without inspecting
-    ///   the return value via [`Self::last_route_outcome`].
+    /// A [`RouteResult`] describing downstream sink backpressure for the
+    /// individual call (audit F-RM-12):
+    /// - [`RouteResult::Routed`] -- alert accepted by the sink, no older
+    ///   entry overwritten, no rate limit hit.
+    /// - [`RouteResult::Dropped`] -- alert accepted but the event-log ring
+    ///   buffer wrapped and an older alert was overwritten to make room.
+    ///   The current alert is in the log; one (or more) historical alerts
+    ///   have fallen off the end of the in-memory ring.  Operators should
+    ///   treat this as an audit-completeness signal and ensure off-board
+    ///   exfiltration is fast enough to keep up.
+    /// - [`RouteResult::Throttled`] -- reserved for future rate-limit
+    ///   integration; the stock orchestrator never emits this today.
+    ///
+    /// Audit-trail health (event-log append failures, platform-disable
+    /// state) is reported separately via [`Self::last_route_outcome`] /
+    /// the [`RouteOutcome`] enum so per-call backpressure and audit-trail
+    /// integrity remain orthogonal signals.
     ///
     /// # Alert ID contract
     ///
@@ -1126,7 +1184,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
     /// payload always carry the post-increment value.  Sequence 0 is
     /// reserved as a sentinel and never appears in the event log, so any
     /// caller-supplied `alert.id` field is ignored for routing purposes.
-    pub fn route_alert(&mut self, alert: &SecurityAlert, ts_us: u64) -> RouteOutcome {
+    pub fn route_alert(&mut self, alert: &SecurityAlert, ts_us: u64) -> RouteResult {
         // Pre-increment so that sequence 0 is never used as an alert id,
         // ensuring every alert gets a unique non-zero identifier.  The
         // caller-supplied `alert.id` is overwritten below with this
@@ -1156,10 +1214,16 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
         };
         let bytes = payload.to_bytes();
 
-        // Snapshot the event-log failure counter before the append so we
-        // can distinguish "this append failed" from "a prior append left
-        // the log degraded but this one succeeded".
+        // Snapshot the event-log failure counter and ring-buffer
+        // overflow counter before the append.  The two snapshots feed
+        // two orthogonal post-conditions:
+        //
+        //  * `failures_before` vs `event_log_failures`  -> RouteOutcome
+        //    (audit-trail integrity, surfaced via `last_route_outcome`).
+        //  * `overflow_before`  vs `overflow_count()`   -> RouteResult
+        //    (per-call sink backpressure, returned to the caller).
         let failures_before = self.event_log_failures;
+        let overflow_before = self.event_logger.overflow_count();
         try_log!(self, EventType::SecurityAlert, &bytes, ts_us);
 
         let outcome = if self.event_log_failures == 0 {
@@ -1182,7 +1246,21 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
         };
 
         self.last_route_outcome = outcome;
-        outcome
+
+        // RouteResult: backpressure signal for the caller.  An audit-trail
+        // failure (`event_log_failures > 0`) also surfaces as `Dropped`
+        // here so addon crates that only inspect `RouteResult` still
+        // observe lost alerts.  Otherwise: if the event-log ring buffer
+        // wrapped on this append (overflow_count advanced), an older
+        // alert was overwritten and we report `Dropped`.  Nominal path
+        // is `Routed`.  `Throttled` is reserved for future rate-limit
+        // integration and is not emitted by the stock orchestrator.
+        let overflow_after = self.event_logger.overflow_count();
+        if self.event_log_failures > 0 || overflow_after > overflow_before {
+            RouteResult::Dropped
+        } else {
+            RouteResult::Routed
+        }
     }
 
     /// Returns the outcome of the most recent [`route_alert`](Self::route_alert)

@@ -839,7 +839,7 @@ impl<C: CryptoProvider> BootVerifier<C> {
     ///
     /// The pre-image binds, in order:
     ///
-    /// 1. [`KEY_ROTATION_AUTH_DOMAIN`] — 25-byte domain separation tag
+    /// 1. `KEY_ROTATION_AUTH_DOMAIN` — 25-byte domain separation tag
     /// 2. `rotation_counter` as big-endian `u64` — 8 bytes (anti-replay)
     /// 3. `slot` as big-endian `u32` — 4 bytes (cross-slot binding)
     /// 4. `new_key` — 65 bytes
@@ -2553,8 +2553,7 @@ mod tests {
             stage_versions: [0; PCR_COUNT],
             key_rotation_counter: 9,
         };
-        let verifier =
-            BootVerifier::new_persisted(crypto, BootFailurePolicy::Halt, floor);
+        let verifier = BootVerifier::new_persisted(crypto, BootFailurePolicy::Halt, floor);
         assert_eq!(verifier.key_rotation_counter(), 9);
         assert_eq!(verifier.floor_for_persistence(), floor);
     }

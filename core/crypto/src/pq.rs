@@ -269,17 +269,16 @@ impl rand_core::RngCore for FnRng {
             // dead-branch of `NonZeroU32::new` becomes genuinely
             // unreachable, so we mark it as such instead of panicking.
             const _: () = assert!(0xDEAD != 0, "RNG_FAIL_CODE must be non-zero");
-            const RNG_FAIL_CODE: core::num::NonZeroU32 =
-                match core::num::NonZeroU32::new(0xDEAD) {
-                    Some(v) => v,
-                    // SAFETY (logic, not memory): the const-assert
-                    // above proves the operand is non-zero, so this
-                    // branch is unreachable.  `unreachable!` is
-                    // permitted in const because it is never
-                    // evaluated; it documents the invariant without
-                    // introducing a release-build panic path.
-                    None => unreachable!(),
-                };
+            const RNG_FAIL_CODE: core::num::NonZeroU32 = match core::num::NonZeroU32::new(0xDEAD) {
+                Some(v) => v,
+                // SAFETY (logic, not memory): the const-assert
+                // above proves the operand is non-zero, so this
+                // branch is unreachable.  `unreachable!` is
+                // permitted in const because it is never
+                // evaluated; it documents the invariant without
+                // introducing a release-build panic path.
+                None => unreachable!(),
+            };
             return Err(rand_core::Error::from(RNG_FAIL_CODE));
         }
         Ok(())
