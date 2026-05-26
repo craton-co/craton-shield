@@ -862,11 +862,11 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vs-anomaly"
-version = "0.7.0"
+version = "0.7.1"
 
 [[package]]
 name = "vs-autosar"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-hal",
  "vs-types",
@@ -875,7 +875,7 @@ dependencies = [
 
 [[package]]
 name = "vs-bacnet-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-ind",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "vs-ble-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-embedded",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "vs-can-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "subtle",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "vs-coap-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-embedded",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "vs-crypto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aes-gcm",
  "criterion",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "vs-diag-gateway"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-crypto",
  "vs-types",
@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "vs-dnp3-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-ind",
@@ -943,7 +943,7 @@ dependencies = [
 
 [[package]]
 name = "vs-eth-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "vs-types",
@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "vs-ethernetip-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-ind",
@@ -959,7 +959,7 @@ dependencies = [
 
 [[package]]
 name = "vs-event-logger"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "subtle",
  "vs-crypto",
@@ -968,11 +968,11 @@ dependencies = [
 
 [[package]]
 name = "vs-evidence-envelope"
-version = "0.7.0"
+version = "0.7.1"
 
 [[package]]
 name = "vs-ffi"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-crypto",
  "vs-runtime",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "vs-ffi-auto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "vs-crypto",
@@ -993,14 +993,14 @@ dependencies = [
 
 [[package]]
 name = "vs-hal"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
 ]
 
 [[package]]
 name = "vs-hal-linux"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "libc",
@@ -1010,14 +1010,14 @@ dependencies = [
 
 [[package]]
 name = "vs-health"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
 ]
 
 [[package]]
 name = "vs-ids-engine"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "vs-can-monitor",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "vs-iec60870-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-ind",
@@ -1035,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "vs-iec61850-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-ind",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "vs-integrity"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-crypto",
  "vs-types",
@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "vs-key-manager"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "vs-crypto",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "vs-lora-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aes",
  "cmac",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "vs-modbus-monitor-emb"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-embedded",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "vs-modbus-monitor-ind"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-ind",
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "vs-mqtt-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-embedded",
@@ -1095,7 +1095,7 @@ dependencies = [
 
 [[package]]
 name = "vs-netfw"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-eth-monitor",
  "vs-types",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "vs-opcua-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-ind",
@@ -1111,7 +1111,7 @@ dependencies = [
 
 [[package]]
 name = "vs-ota-validator"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "serde",
  "serde-json-core",
@@ -1124,14 +1124,14 @@ dependencies = [
 
 [[package]]
 name = "vs-policy-engine"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
 ]
 
 [[package]]
 name = "vs-profinet-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-ind",
@@ -1139,7 +1139,7 @@ dependencies = [
 
 [[package]]
 name = "vs-report-iec62304"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "vs-evidence-envelope",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "vs-report-iec62443"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-evidence-envelope",
  "vs-types",
@@ -1156,7 +1156,7 @@ dependencies = [
 
 [[package]]
 name = "vs-report-iso21434"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-evidence-envelope",
  "vs-types",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "vs-runtime"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-anomaly",
  "vs-can-monitor",
@@ -1185,7 +1185,7 @@ dependencies = [
 
 [[package]]
 name = "vs-runtime-auto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "criterion",
  "vs-can-monitor",
@@ -1202,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "vs-runtime-embedded"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-ble-monitor",
  "vs-coap-monitor",
@@ -1218,7 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "vs-runtime-ind"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-bacnet-monitor",
  "vs-crypto",
@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "vs-s7comm-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-ind",
@@ -1245,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "vs-secure-boot"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-crypto",
  "vs-types",
@@ -1254,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "vs-signal-ids"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-anomaly",
  "vs-can-monitor",
@@ -1263,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "vs-storage"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "libc",
  "vs-crypto",
@@ -1273,35 +1273,35 @@ dependencies = [
 
 [[package]]
 name = "vs-types"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "subtle",
 ]
 
 [[package]]
 name = "vs-types-auto"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
 ]
 
 [[package]]
 name = "vs-types-embedded"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
 ]
 
 [[package]]
 name = "vs-types-ind"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
 ]
 
 [[package]]
 name = "vs-v2x"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-crypto",
  "vs-types",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "vs-zigbee-monitor"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "vs-types",
  "vs-types-embedded",

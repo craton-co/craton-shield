@@ -1002,11 +1002,11 @@ impl<C: CryptoProvider> KeyManager<C> {
 
     /// Append an audit entry for a state-mutating key operation.
     ///
-    /// This is a fail-closed two-phase operation. [`prepare_audit`] computes
+    /// This is a fail-closed two-phase operation. [`Self::prepare_audit`] computes
     /// the new entry and its chain hash *before* the caller mutates slot
     /// state; if the crypto provider fails to compute the chain hash it
     /// returns [`VsError::CryptoError`] and the caller must abort the whole
-    /// operation with no slot mutation. [`commit_audit`] then stores the
+    /// operation with no slot mutation. [`Self::commit_audit`] then stores the
     /// already-validated entry and can never fail.
     ///
     /// `append_audit` is retained for the best-effort [`tick`](Self::tick)
@@ -1076,7 +1076,7 @@ impl<C: CryptoProvider> KeyManager<C> {
     }
 
     /// Phase 2 of an audit append: store the entry prepared by
-    /// [`prepare_audit`]. Infallible — all crypto work happened in phase 1.
+    /// [`Self::prepare_audit`]. Infallible — all crypto work happened in phase 1.
     fn commit_audit(&mut self, prepared: PreparedAudit) {
         if prepared.is_overflow {
             self.audit_overflow_count = self.audit_overflow_count.saturating_add(1);
@@ -2765,10 +2765,7 @@ mod tests {
         let meta = make_metadata(KeyId(0));
         mgr.provision_key(KeyId(0), meta, &test_key(0xAA)).unwrap();
         mgr.crypto().set_fail(true);
-        assert_eq!(
-            mgr.revoke_key(KeyId(0), 2000),
-            Err(VsError::CryptoError)
-        );
+        assert_eq!(mgr.revoke_key(KeyId(0), 2000), Err(VsError::CryptoError));
         // Slot must remain active, not revoked.
         assert!(mgr.is_key_valid(KeyId(0), 1500));
         mgr.crypto().set_fail(false);
@@ -2780,10 +2777,7 @@ mod tests {
         let mut mgr = KeyManager::new(FailingCrypto::new());
         mgr.crypto().set_fail(true);
         let meta = make_metadata(KeyId(0));
-        assert_eq!(
-            mgr.generate_key(KeyId(0), meta),
-            Err(VsError::CryptoError)
-        );
+        assert_eq!(mgr.generate_key(KeyId(0), meta), Err(VsError::CryptoError));
         assert!(mgr.get_metadata(KeyId(0)).is_none());
         assert_eq!(mgr.audit_count(), 0);
     }

@@ -6,6 +6,9 @@
 #   ./scripts/local-ci.sh                    # Run all jobs for all layers
 #   ./scripts/local-ci.sh fmt test           # Run specific jobs only
 #   ./scripts/local-ci.sh --fast             # Skip slow jobs (coverage, audit, msrv)
+#   ./scripts/local-ci.sh coverage           # Tests + lcov in one pass (no separate test job)
+#   ./scripts/local-ci.sh --layer core coverage
+#   ./scripts/local-ci.sh --coverage-lib-only coverage  # Faster, lib tests only
 #   ./scripts/local-ci.sh --layer core       # Run only core layer
 #   ./scripts/local-ci.sh --layer auto,emb   # Run only auto + embedded layers
 #
@@ -41,6 +44,7 @@ RESULTS=()
 
 JOBS_TO_RUN=()
 FAST_MODE=false
+COVERAGE_LIB_ONLY=false
 LAYERS=()
 VALID_JOBS=(fmt clippy test thumbv7em doc audit deny msrv coverage)
 VALID_LAYERS=(core auto emb ind all)
@@ -50,6 +54,18 @@ NOSTD_CORE=(vs-types vs-crypto vs-can-monitor vs-eth-monitor vs-netfw vs-policy-
 NOSTD_AUTO=(vs-types-auto vs-signal-ids)
 NOSTD_EMB=(vs-types-embedded vs-mqtt-monitor vs-coap-monitor vs-runtime-embedded)
 NOSTD_IND=(vs-types-ind vs-modbus-monitor-ind vs-runtime-ind)
+
+# Workspace packages per layer for scoped coverage (cargo llvm-cov -p …).
+COV_CORE=(vs-types vs-health vs-crypto vs-key-manager vs-secure-boot vs-can-monitor vs-eth-monitor
+    vs-ids-engine vs-anomaly vs-integrity vs-netfw vs-ota-validator vs-event-logger vs-policy-engine
+    vs-runtime vs-ffi vs-storage vs-hal vs-hal-linux vs-evidence-envelope vs-report-iec62443
+    vs-report-iso21434 vs-report-iec62304)
+COV_AUTO=(vs-types-auto vs-autosar vs-v2x vs-signal-ids vs-diag-gateway vs-runtime-auto vs-ffi-auto)
+COV_EMB=(vs-types-embedded vs-mqtt-monitor vs-coap-monitor vs-ble-monitor vs-zigbee-monitor
+    vs-lora-monitor vs-modbus-monitor-emb vs-runtime-embedded)
+COV_IND=(vs-types-ind vs-modbus-monitor-ind vs-opcua-monitor vs-profinet-monitor vs-ethernetip-monitor
+    vs-dnp3-monitor vs-bacnet-monitor vs-runtime-ind vs-s7comm-monitor vs-iec60870-monitor
+    vs-iec61850-monitor)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -80,6 +96,34 @@ layer_enabled() {
     return 1
 }
 
+# Append -p flags for enabled layers into COVERAGE_PACKAGE_ARGS.
+# When no --layer filter is set, leaves COVERAGE_PACKAGE_ARGS empty (= use --workspace).
+coverage_collect_package_args() {
+    COVERAGE_PACKAGE_ARGS=()
+    [[ ${#LAYERS[@]} -eq 0 ]] && return 0
+
+    if layer_enabled core; then
+        for pkg in "${COV_CORE[@]}"; do
+            COVERAGE_PACKAGE_ARGS+=(-p "$pkg")
+        done
+    fi
+    if layer_enabled auto; then
+        for pkg in "${COV_AUTO[@]}"; do
+            COVERAGE_PACKAGE_ARGS+=(-p "$pkg")
+        done
+    fi
+    if layer_enabled emb; then
+        for pkg in "${COV_EMB[@]}"; do
+            COVERAGE_PACKAGE_ARGS+=(-p "$pkg")
+        done
+    fi
+    if layer_enabled ind; then
+        for pkg in "${COV_IND[@]}"; do
+            COVERAGE_PACKAGE_ARGS+=(-p "$pkg")
+        done
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Parse arguments
 # ---------------------------------------------------------------------------
@@ -87,6 +131,7 @@ layer_enabled() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --fast) FAST_MODE=true; shift ;;
+        --coverage-lib-only) COVERAGE_LIB_ONLY=true; shift ;;
         --layer)
             shift
             IFS=',' read -ra _layers <<< "${1:?--layer requires a value}"
@@ -107,8 +152,12 @@ while [[ $# -gt 0 ]]; do
             echo "Jobs:   ${VALID_JOBS[*]}"
             echo "Layers: ${VALID_LAYERS[*]}  (comma-separated, default: all)"
             echo ""
-            echo "  --fast            Skip slow jobs (coverage, audit, msrv)"
-            echo "  --layer core,auto Run only specific layers"
+            echo "  --fast                 Skip slow jobs (coverage, audit, msrv)"
+            echo "  --layer core,auto      Run only specific layers (tests + coverage)"
+            echo "  --coverage-lib-only    Coverage: unit tests in lib/ only (faster, less complete)"
+            echo ""
+            echo "  coverage runs the test suite via cargo llvm-cov test; if both test and"
+            echo "  coverage are requested, the standalone test job is skipped."
             exit 0
             ;;
         *)
@@ -304,8 +353,28 @@ job_coverage() {
         echo "Warning: failed to add llvm-tools-preview component" >&2
     fi
 
+    coverage_collect_package_args
+
+    local -a llvm_args=(test)
+    if [[ ${#COVERAGE_PACKAGE_ARGS[@]} -gt 0 ]]; then
+        llvm_args+=("${COVERAGE_PACKAGE_ARGS[@]}")
+        echo "Coverage scope: ${#COVERAGE_PACKAGE_ARGS[@]} package(s) (layer filter)"
+    else
+        llvm_args+=(--workspace)
+        echo "Coverage scope: full workspace"
+    fi
+    if [[ "$COVERAGE_LIB_ONLY" = true ]]; then
+        llvm_args+=(--lib)
+        echo "Coverage mode: lib unit tests only (--coverage-lib-only)"
+    else
+        echo "Coverage mode: all tests (unit + integration)"
+    fi
+
     local cov_output="target/lcov.info"
-    cargo llvm-cov --workspace --lcov --output-path "$cov_output"
+    llvm_args+=(--lcov --output-path "$cov_output")
+
+    echo "Running tests once under LLVM instrumentation (cargo llvm-cov test)..."
+    cargo llvm-cov "${llvm_args[@]}"
     echo ""
     echo "Coverage report written to $cov_output"
 
@@ -367,7 +436,11 @@ if should_run clippy; then
     run_job "clippy" "Lint (clippy, deny warnings)" job_clippy
 fi
 if should_run test; then
-    run_job "test" "Run all tests" job_test
+    if should_run coverage; then
+        skip_job "test" "tests run inside coverage (cargo llvm-cov test)"
+    else
+        run_job "test" "Run all tests" job_test
+    fi
 fi
 if should_run thumbv7em; then
     run_job "thumbv7em" "Check no_std (Cortex-M target)" job_thumbv7em
