@@ -243,6 +243,18 @@ const fn near_overflow_threshold(capacity: usize) -> usize {
 /// protected store) on shutdown and re-anchor on boot before the first
 /// `append`. This crate intentionally keeps that responsibility outside its
 /// surface so the storage backend can be chosen per-deployment.
+///
+/// # In-RAM truncation / replay
+///
+/// The per-entry HMAC mixes in the live `overflow_count`, but that counter is
+/// a single scalar with no external anchor. An attacker who can rewrite the
+/// in-RAM ring buffer can truncate the log and replace it with an earlier,
+/// internally-consistent prefix carrying a correspondingly lower
+/// `overflow_count`: every HMAC still verifies because the counter matches the
+/// reconstruction formula. [`Self::verify_chain`] therefore proves *internal
+/// consistency* of the entries present, not that no entries were dropped.
+/// Detecting truncation requires the same persistent `(sequence, hash)` anchor
+/// described above, compared against the highest sequence ever observed.
 pub struct EventLog<C: CryptoProvider, const CAPACITY: usize> {
     entries: [Option<LogEntry>; CAPACITY],
     /// Ring-buffer write position (next slot to write).
@@ -396,6 +408,21 @@ impl<C: CryptoProvider, const CAPACITY: usize> EventLog<C, CAPACITY> {
         // the trailing 8 bytes are the current overflow count, so ring-buffer
         // overflows are captured in the tamper chain without a separate
         // entry. Avoids an intermediate 178-byte stack copy.
+        //
+        // CRITICAL hidden invariant: `verify_chain` cannot read the live
+        // `overflow_count`, so it reconstructs the value used here as
+        // `sequence.saturating_sub(CAPACITY)`. That identity only holds while
+        // `overflow_count` is incremented exactly once per append after the
+        // ring is full and never reset. The assertion below pins the producer
+        // (here) to the verifier's reconstruction formula: any future change
+        // to overflow accounting that breaks the identity fails fast in debug
+        // builds instead of silently corrupting every stored HMAC.
+        debug_assert_eq!(
+            self.overflow_count,
+            sequence.saturating_sub(CAPACITY as u64),
+            "overflow_count must equal sequence.saturating_sub(CAPACITY); \
+             verify_chain reconstructs it from this identity"
+        );
         let mut hmac_buf = [0u8; HMAC_MESSAGE_SIZE + 8];
         entry.write_fields(&mut hmac_buf[..HMAC_MESSAGE_SIZE]);
         hmac_buf[HMAC_MESSAGE_SIZE..].copy_from_slice(&self.overflow_count.to_le_bytes());
@@ -497,6 +524,10 @@ impl<C: CryptoProvider, const CAPACITY: usize> EventLog<C, CAPACITY> {
             // Reconstruct the overflow count that was used when this entry's
             // HMAC was computed. The HMAC is computed *before* the overflow
             // counter is incremented, so: overflow = max(0, seq - CAP).
+            //
+            // This formula is the verifier half of the hidden invariant
+            // asserted in `append` (see the `debug_assert_eq!` there): the two
+            // sites must stay in lock-step or every stored HMAC is corrupted.
             let overflow_at_entry = entry.sequence.saturating_sub(CAPACITY as u64);
             let mut hmac_buf = [0u8; HMAC_MESSAGE_SIZE + 8];
             entry.write_fields(&mut hmac_buf[..HMAC_MESSAGE_SIZE]);
