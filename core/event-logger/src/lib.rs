@@ -195,7 +195,10 @@ pub struct ChainIntegrity {
 // EventLog
 // ---------------------------------------------------------------------------
 
-/// Domain separator used to compute the crypto provider fingerprint.
+/// Domain separator HMAC'd under `hmac_key_id` to compute the crypto-provider
+/// binding fingerprint. The fingerprint is key-specific: a different key slot
+/// (or rotated key material) yields a different fingerprint, so a key swap is
+/// detected rather than silently producing un-verifiable HMACs.
 const CRYPTO_BINDING_DOMAIN: &[u8] = b"vs-event-log-crypto-binding-v1";
 
 /// Threshold at which [`EventLog::is_near_overflow`] reports `true`. Computed
@@ -209,9 +212,22 @@ const fn near_overflow_threshold(capacity: usize) -> usize {
 /// `C` is the cryptographic provider used for SHA-256 and HMAC-SHA256.
 /// `CAPACITY` is the maximum number of entries held in memory (ring wraps).
 ///
-/// The log is bound to a specific `CryptoProvider` instance at construction
-/// time via a fingerprint.  Passing a different provider to [`Self::append`] or
-/// [`Self::verify_chain`] returns [`VsError::InvalidConfig`].
+/// # Crypto-provider binding
+///
+/// The log is bound to a specific `CryptoProvider` *and HMAC key* at
+/// construction time via a fingerprint computed as
+/// `HMAC-SHA256(hmac_key_id, CRYPTO_BINDING_DOMAIN)`. Because the fingerprint
+/// is an HMAC keyed by the same slot used to sign entries, it changes whenever
+/// the underlying key material changes — not just when the provider *type*
+/// changes. Passing a provider to [`Self::append`] or [`Self::verify_chain`]
+/// whose key slot holds different material (a key swap or rotation) therefore
+/// returns [`VsError::InvalidConfig`] instead of silently producing HMACs that
+/// would never verify. The check is fail-closed: any binding mismatch aborts
+/// the operation.
+///
+/// Note this binding still cannot distinguish two providers that hold
+/// *identical* key material in the same slot — that is the intended behaviour,
+/// since such providers are cryptographically interchangeable for this log.
 ///
 /// # No persistent anchor across reboots
 ///
@@ -239,8 +255,9 @@ pub struct EventLog<C: CryptoProvider, const CAPACITY: usize> {
     last_timestamp_us: u64,
     /// Key slot used for HMAC signing.
     hmac_key_id: KeyId,
-    /// SHA-256 fingerprint of the crypto provider, computed at construction.
-    /// Used to detect accidental provider swaps between calls.
+    /// Key-bound fingerprint of the crypto provider, computed at construction
+    /// as `HMAC-SHA256(hmac_key_id, CRYPTO_BINDING_DOMAIN)`. Detects both
+    /// provider-type swaps and key-material swaps/rotation on `hmac_key_id`.
     crypto_fingerprint: [u8; 32],
     /// Cached serialization of the most recently appended entry, used to
     /// compute `prev_hash` for the next append without re-serializing.
@@ -260,13 +277,18 @@ impl<C: CryptoProvider, const CAPACITY: usize> EventLog<C, CAPACITY> {
     ///
     /// `hmac_key_id` identifies the key slot used for HMAC-SHA256 signing and
     /// verification of log entries.  The `crypto` provider is fingerprinted
-    /// so that subsequent [`append`](Self::append) and
-    /// [`verify_chain`](Self::verify_chain) calls can detect accidental
-    /// provider swaps.
+    /// under that key so that subsequent [`append`](Self::append) and
+    /// [`verify_chain`](Self::verify_chain) calls can detect both provider
+    /// swaps and key-material swaps/rotation on the bound slot.
     pub fn new(hmac_key_id: KeyId, crypto: &C) -> Result<Self, VsError> {
         const { assert!(CAPACITY > 0, "EventLog CAPACITY must be greater than zero") };
+        // Bind the fingerprint to the actual HMAC key material: an HMAC of a
+        // fixed domain under `hmac_key_id`. A different key (swap or rotation)
+        // produces a different fingerprint, so `verify_crypto_binding` rejects
+        // it instead of letting `append`/`verify_chain` compute HMACs that
+        // would never verify.
         let mut fingerprint = [0u8; 32];
-        crypto.sha256(CRYPTO_BINDING_DOMAIN, &mut fingerprint)?;
+        crypto.hmac_sha256(hmac_key_id, CRYPTO_BINDING_DOMAIN, &mut fingerprint)?;
         Ok(Self {
             entries: core::array::from_fn(|_| None),
             head: 0,
@@ -282,10 +304,17 @@ impl<C: CryptoProvider, const CAPACITY: usize> EventLog<C, CAPACITY> {
         })
     }
 
-    /// Verify that `crypto` matches the provider used at construction time.
+    /// Verify that `crypto` matches the provider *and key material* bound at
+    /// construction time.
+    ///
+    /// Recomputes the key-bound fingerprint
+    /// (`HMAC-SHA256(hmac_key_id, CRYPTO_BINDING_DOMAIN)`) and compares it in
+    /// constant time. A mismatch — provider swap, key swap, or key rotation —
+    /// is fail-closed: the caller's operation is aborted with
+    /// [`VsError::InvalidConfig`].
     fn verify_crypto_binding(&self, crypto: &C) -> Result<(), VsError> {
         let mut fp = [0u8; 32];
-        crypto.sha256(CRYPTO_BINDING_DOMAIN, &mut fp)?;
+        crypto.hmac_sha256(self.hmac_key_id, CRYPTO_BINDING_DOMAIN, &mut fp)?;
         // Constant-time comparison via `subtle` to avoid timing leaks.
         if !bool::from(fp.ct_eq(&self.crypto_fingerprint)) {
             return Err(VsError::InvalidConfig);
@@ -1357,6 +1386,36 @@ mod tests {
         assert_eq!(&hmac_buf[..], &ser_buf[..HMAC_MESSAGE_SIZE]);
         // And the trailing 32 bytes of `serialize` are exactly `entry_hmac`.
         assert_eq!(&ser_buf[HMAC_MESSAGE_SIZE..], &entry.entry_hmac[..]);
+    }
+
+    /// H-1 regression: the crypto-provider binding is keyed by `hmac_key_id`,
+    /// so a provider that effectively holds different key material (modelled
+    /// here by signing the same log with a different `KeyId`) is rejected with
+    /// `VsError::InvalidConfig` rather than silently producing un-verifiable
+    /// HMACs. This exercises the previously-untested binding failure path.
+    #[test]
+    fn crypto_binding_rejects_key_swap() {
+        // Log bound to key slot 42.
+        let mut log = EventLog::<TestCrypto, TEST_CAP>::new(KeyId(42), &crypto()).unwrap();
+        let c = crypto();
+        log.append(EventType::SecurityAlert, &[1], 100, &c).unwrap();
+
+        // Simulate a key swap: the same fingerprint slot now holds different
+        // material. We model that by constructing a log bound to a different
+        // key and copying its (mismatching) fingerprint into our log.
+        let other = EventLog::<TestCrypto, TEST_CAP>::new(KeyId(99), &crypto()).unwrap();
+        assert_ne!(
+            log.crypto_fingerprint, other.crypto_fingerprint,
+            "different key slots must yield different binding fingerprints"
+        );
+        log.crypto_fingerprint = other.crypto_fingerprint;
+
+        // Both append and verify_chain must now fail-closed.
+        assert_eq!(
+            log.append(EventType::SecurityAlert, &[2], 200, &c),
+            Err(VsError::InvalidConfig)
+        );
+        assert_eq!(log.verify_chain(&c), Err(VsError::InvalidConfig));
     }
 
     #[test]
