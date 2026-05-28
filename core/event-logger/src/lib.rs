@@ -9,7 +9,10 @@
 //!
 //! The `EventLog` type, its `append` / `verify_chain` methods, and the
 //! `LogEntry` / `EventType` / `ChainIntegrity` types form the v1.0 stable
-//! surface and are governed by `DEPRECATION.md`.
+//! surface and are governed by the workspace deprecation policy at
+//! <https://github.com/craton-co/craton-shield/blob/main/DEPRECATION.md>
+//! (`DEPRECATION.md` lives at the repository root, not in this crate, so it
+//! is not packaged on crates.io — hence the absolute link).
 //!
 //! # No-reboot-anchor limitation
 //!
