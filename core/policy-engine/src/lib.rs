@@ -435,6 +435,138 @@ fn auth_level_tag(level: AuthenticationLevel) -> u8 {
     }
 }
 
+/// Two unrelated SipHash-2-4 key pairs used for the rule-table integrity
+/// checksum. The two lanes produced under these keys are independent, which
+/// is what gives the 128-bit digest its full ~2^64 birthday bound (a
+/// dual-FNV scheme would not — its second hash is an affine image of the
+/// first). These are fixed, public constants: they are NOT a secret, so the
+/// checksum detects corruption but not deliberate tampering. See
+/// [`PolicyEngine::compute_checksum`].
+const CHECKSUM_KEYS: [(u64, u64); 2] = [
+    (0x0706_0504_0302_0100, 0x0f0e_0d0c_0b0a_0908),
+    (0xa5a4_a3a2_a1a0_9f9e, 0xb7b6_b5b4_b3b2_b1b0),
+];
+
+/// Streaming SipHash-2-4 hasher: feeds a byte stream through the standard
+/// SipHash-2-4 compression function 8 bytes at a time, without materialising
+/// the full message in a buffer (important for a `no_std` crate with up to
+/// [`MAX_RULES`] rules).
+struct Sip {
+    v0: u64,
+    v1: u64,
+    v2: u64,
+    v3: u64,
+    /// Bytes not yet absorbed into a full 8-byte block.
+    tail: [u8; 8],
+    /// Number of valid bytes in `tail` (0..8).
+    tail_len: usize,
+    /// Total number of bytes fed so far.
+    total: usize,
+}
+
+impl Sip {
+    /// Initialise the SipHash-2-4 state from a key pair.
+    fn new(k0: u64, k1: u64) -> Self {
+        Self {
+            v0: k0 ^ 0x736f_6d65_7073_6575,
+            v1: k1 ^ 0x646f_7261_6e64_6f6d,
+            v2: k0 ^ 0x6c79_6765_6e65_7261,
+            v3: k1 ^ 0x7465_6462_7974_6573,
+            tail: [0; 8],
+            tail_len: 0,
+            total: 0,
+        }
+    }
+
+    /// Compress one full 8-byte little-endian message block.
+    #[inline]
+    fn compress(&mut self, m: u64) {
+        self.v3 ^= m;
+        vs_types::sip_round(&mut self.v0, &mut self.v1, &mut self.v2, &mut self.v3);
+        vs_types::sip_round(&mut self.v0, &mut self.v1, &mut self.v2, &mut self.v3);
+        self.v0 ^= m;
+    }
+
+    /// Absorb a single byte into the stream.
+    #[inline]
+    fn write_u8(&mut self, byte: u8) {
+        self.tail[self.tail_len] = byte;
+        self.tail_len += 1;
+        self.total += 1;
+        if self.tail_len == 8 {
+            let m = u64::from_le_bytes(self.tail);
+            self.compress(m);
+            self.tail_len = 0;
+        }
+    }
+
+    /// Finalise and return the 64-bit digest.
+    fn finish(mut self) -> u64 {
+        // Last block: the remaining tail bytes plus the message length in
+        // the most-significant byte (standard SipHash padding).
+        let mut last = (self.total as u64 & 0xff) << 56;
+        for (i, &b) in self.tail[..self.tail_len].iter().enumerate() {
+            last |= (b as u64) << (i * 8);
+        }
+        self.compress(last);
+
+        self.v2 ^= 0xff;
+        vs_types::sip_round(&mut self.v0, &mut self.v1, &mut self.v2, &mut self.v3);
+        vs_types::sip_round(&mut self.v0, &mut self.v1, &mut self.v2, &mut self.v3);
+        vs_types::sip_round(&mut self.v0, &mut self.v1, &mut self.v2, &mut self.v3);
+        vs_types::sip_round(&mut self.v0, &mut self.v1, &mut self.v2, &mut self.v3);
+
+        self.v0 ^ self.v1 ^ self.v2 ^ self.v3
+    }
+}
+
+/// A pair of independent streaming SipHash-2-4 lanes producing a 128-bit
+/// integrity digest. The same byte stream is fed to both lanes, but each
+/// lane uses an unrelated key pair so the two 64-bit outputs are genuinely
+/// independent.
+struct DualSip {
+    lane0: Sip,
+    lane1: Sip,
+}
+
+impl DualSip {
+    /// Initialise both lanes from [`CHECKSUM_KEYS`].
+    fn new() -> Self {
+        Self {
+            lane0: Sip::new(CHECKSUM_KEYS[0].0, CHECKSUM_KEYS[0].1),
+            lane1: Sip::new(CHECKSUM_KEYS[1].0, CHECKSUM_KEYS[1].1),
+        }
+    }
+
+    /// Feed a single byte into both lanes.
+    #[inline]
+    fn feed_u8(&mut self, byte: u8) {
+        self.lane0.write_u8(byte);
+        self.lane1.write_u8(byte);
+    }
+
+    /// Feed a `u32` as little-endian bytes into both lanes.
+    #[inline]
+    fn feed_u32(&mut self, val: u32) {
+        for b in val.to_le_bytes() {
+            self.feed_u8(b);
+        }
+    }
+
+    /// Feed a `u64` as little-endian bytes into both lanes.
+    #[inline]
+    fn feed_u64(&mut self, val: u64) {
+        for b in val.to_le_bytes() {
+            self.feed_u8(b);
+        }
+    }
+
+    /// Finalise both lanes and return the 128-bit digest as `[u64; 2]`.
+    fn finish(self) -> [u64; 2] {
+        [self.lane0.finish(), self.lane1.finish()]
+    }
+}
+
 /// Returns `true` when the rule's time constraints are satisfied by `env`.
 fn rule_time_valid(rule: &PolicyRule, env: &Environment) -> bool {
     // Fast path: most rules have no time constraints at all.
@@ -506,17 +638,19 @@ pub struct PolicyEngine {
 impl PolicyEngine {
     /// Creates an empty policy engine with no rules loaded.
     pub fn new() -> Self {
-        Self {
+        let mut engine = Self {
             rules: [None; MAX_RULES],
             count: 0,
             audit_callback: None,
             version: 0,
             combining_algorithm: CombiningAlgorithm::FirstMatch,
-            // Must match compute_checksum() for an empty rule set (the
-            // FNV-1a offset basis values with zero bytes fed).
-            rule_checksum: [0xcbf2_9ce4_8422_2325, 0x6c62_272e_07bb_0142],
+            rule_checksum: [0; 2],
             action_index: [0u64; ACTION_INDEX_BUCKETS],
-        }
+        };
+        // The integrity checksum must match `compute_checksum()` for an empty
+        // rule set (the SipHash-2-4 digest of an empty byte stream).
+        engine.rule_checksum = engine.compute_checksum();
+        engine
     }
 
     /// Returns the number of rules currently loaded.
@@ -754,7 +888,9 @@ impl PolicyEngine {
         // be observable via `policy_version()` independent of any subsequent
         // `load_policy_set` / `add_rule` calls.
         self.version = self.version.saturating_add(1);
-        self.rule_checksum = [0xcbf2_9ce4_8422_2325, 0x6c62_272e_07bb_0142];
+        // Recompute rather than hardcode: the empty-rule-set checksum is the
+        // SipHash-2-4 digest of an empty byte stream.
+        self.rule_checksum = self.compute_checksum();
         self.action_index = [0u64; ACTION_INDEX_BUCKETS];
     }
 
@@ -838,155 +974,98 @@ impl PolicyEngine {
     }
 
     /// Computes a 128-bit integrity checksum over ALL rule fields using two
-    /// independent FNV-1a 64-bit hashes with different seeds.
+    /// **genuinely independent** SipHash-2-4 lanes keyed with distinct key
+    /// pairs ([`CHECKSUM_KEYS`]).
     ///
-    /// Using two independent 64-bit hashes provides 128-bit collision
-    /// resistance, making it computationally infeasible to craft a rule set
-    /// that produces the same checksum as a different rule set. This is a
-    /// significant improvement over the prior 32-bit hash which had only
-    /// ~2^16 collision resistance via the birthday bound.
-    ///
-    /// FNV-1a constants:
-    /// - Offset basis: 0xcbf2_9ce4_8422_2325 (standard FNV-1a 64-bit)
-    /// - Prime: 0x0100_0000_01b3 (standard FNV-1a 64-bit)
-    /// - Second seed uses a different offset basis for independence.
+    /// The two lanes are produced by SipHash-2-4 under unrelated keys, so —
+    /// unlike a dual-FNV scheme where the second hash is an affine image of
+    /// the first — the two 64-bit outputs are independent. The 128-bit
+    /// digest therefore provides a ~2^64 birthday bound against accidental
+    /// collisions: it reliably detects bit flips, partial writes, truncated
+    /// loads, and other in-memory corruption of the rule table.
     fn compute_checksum(&self) -> [u64; 2] {
-        // FNV-1a 64-bit constants.
-        const FNV_PRIME: u64 = vs_types::FNV1A_PRIME;
-        const FNV_OFFSET_1: u64 = vs_types::FNV1A_OFFSET_BASIS;
-        const FNV_OFFSET_2: u64 = vs_types::FNV1A_OFFSET_BASIS_2;
-
-        // When the rule set is empty, no bytes are fed, so the hash
-        // returns the offset basis values directly. The initial checksum
-        // stored in the engine must match (see `new()` and `clear_rules()`).
-        let mut h1: u64 = FNV_OFFSET_1;
-        let mut h2: u64 = FNV_OFFSET_2;
-
-        /// Feed a single byte into both FNV-1a hashes.
-        #[inline]
-        fn feed(h1: &mut u64, h2: &mut u64, byte: u8, prime: u64) {
-            *h1 ^= byte as u64;
-            *h1 = h1.wrapping_mul(prime);
-            *h2 ^= byte as u64;
-            *h2 = h2.wrapping_mul(prime);
-        }
-
-        /// Feed a u32 (little-endian bytes) into both hashes.
-        #[inline]
-        fn feed_u32(h1: &mut u64, h2: &mut u64, val: u32, prime: u64) {
-            for b in val.to_le_bytes() {
-                feed(h1, h2, b, prime);
-            }
-        }
-
-        /// Feed a u64 (little-endian bytes) into both hashes.
-        #[inline]
-        fn feed_u64(h1: &mut u64, h2: &mut u64, val: u64, prime: u64) {
-            for b in val.to_le_bytes() {
-                feed(h1, h2, b, prime);
-            }
-        }
-
-        /// Feed a `SubjectMatcher` into both hashes as a tag byte followed by
-        /// the raw little-endian payload bytes of each field. The previous
-        /// approach collapsed multi-field payloads into a single derived u32
-        /// via `wrapping_mul(31).wrapping_add(_)`, which is trivially
-        /// collision-prone (e.g. `AddressRange(1, 31)` vs `AddressRange(2, 0)`
-        /// once tags collide under the mixing). Feeding raw bytes preserves
-        /// the full payload entropy through the 64-bit FNV-1a state.
-        #[inline]
-        fn feed_subject(h1: &mut u64, h2: &mut u64, s: &SubjectMatcher, prime: u64) {
-            match *s {
-                SubjectMatcher::Any => feed(h1, h2, SUBJECT_TAG_ANY, prime),
-                SubjectMatcher::AuthenticatedTester => {
-                    feed(h1, h2, SUBJECT_TAG_AUTH_TESTER, prime);
-                }
-                SubjectMatcher::AuthenticatedWithLevel(level) => {
-                    feed(h1, h2, SUBJECT_TAG_AUTH_WITH_LEVEL, prime);
-                    feed(h1, h2, auth_level_tag(level), prime);
-                }
-                SubjectMatcher::SpecificAddress(addr) => {
-                    feed(h1, h2, SUBJECT_TAG_SPECIFIC_ADDRESS, prime);
-                    for b in addr.to_le_bytes() {
-                        feed(h1, h2, b, prime);
-                    }
-                }
-                SubjectMatcher::AddressRange(lo, hi) => {
-                    feed(h1, h2, SUBJECT_TAG_ADDRESS_RANGE, prime);
-                    for b in lo.to_le_bytes() {
-                        feed(h1, h2, b, prime);
-                    }
-                    for b in hi.to_le_bytes() {
-                        feed(h1, h2, b, prime);
-                    }
-                }
-                SubjectMatcher::EcuRole(role) => {
-                    feed(h1, h2, SUBJECT_TAG_ECU_ROLE, prime);
-                    feed(h1, h2, role, prime);
-                }
-            }
-        }
-
-        /// Feed a `ResourceMatcher` as tag + raw little-endian field bytes.
-        #[inline]
-        fn feed_resource(h1: &mut u64, h2: &mut u64, r: &ResourceMatcher, prime: u64) {
-            match *r {
-                ResourceMatcher::Any => feed(h1, h2, RESOURCE_TAG_ANY, prime),
-                ResourceMatcher::BusId(bt, bid) => {
-                    feed(h1, h2, RESOURCE_TAG_BUS_ID, prime);
-                    feed(h1, h2, bt, prime);
-                    for b in bid.to_le_bytes() {
-                        feed(h1, h2, b, prime);
-                    }
-                }
-                ResourceMatcher::DiagnosticService(sid) => {
-                    feed(h1, h2, RESOURCE_TAG_DIAG_SERVICE, prime);
-                    feed(h1, h2, sid, prime);
-                }
-                ResourceMatcher::ServiceRange(lo, hi) => {
-                    feed(h1, h2, RESOURCE_TAG_SERVICE_RANGE, prime);
-                    feed(h1, h2, lo, prime);
-                    feed(h1, h2, hi, prime);
-                }
-                ResourceMatcher::FirmwareRegion(region) => {
-                    feed(h1, h2, RESOURCE_TAG_FIRMWARE_REGION, prime);
-                    feed(h1, h2, region, prime);
-                }
-            }
-        }
-
-        /// Feed an `ActionMatcher` as tag + raw little-endian field bytes.
-        #[inline]
-        fn feed_action(h1: &mut u64, h2: &mut u64, a: &ActionMatcher, prime: u64) {
-            match *a {
-                ActionMatcher::Any => feed(h1, h2, ACTION_TAG_ANY, prime),
-                ActionMatcher::Read => feed(h1, h2, ACTION_TAG_READ, prime),
-                ActionMatcher::Write => feed(h1, h2, ACTION_TAG_WRITE, prime),
-                ActionMatcher::Execute => feed(h1, h2, ACTION_TAG_EXECUTE, prime),
-                ActionMatcher::Transmit => feed(h1, h2, ACTION_TAG_TRANSMIT, prime),
-                ActionMatcher::DiagnosticRequest(sub) => {
-                    feed(h1, h2, ACTION_TAG_DIAG_REQUEST, prime);
-                    feed(h1, h2, sub, prime);
-                }
-            }
-        }
+        let mut h = DualSip::new();
 
         for rule in self.rules[..self.count].iter().flatten() {
-            feed_u32(&mut h1, &mut h2, rule.id, FNV_PRIME);
-            feed(&mut h1, &mut h2, rule.priority, FNV_PRIME);
-            feed_u64(&mut h1, &mut h2, rule.valid_from, FNV_PRIME);
-            feed_u64(&mut h1, &mut h2, rule.valid_until, FNV_PRIME);
-            feed_u32(
-                &mut h1,
-                &mut h2,
-                effect_discriminant(rule.effect),
-                FNV_PRIME,
-            );
-            feed_subject(&mut h1, &mut h2, &rule.subject, FNV_PRIME);
-            feed_resource(&mut h1, &mut h2, &rule.resource, FNV_PRIME);
-            feed_action(&mut h1, &mut h2, &rule.action, FNV_PRIME);
+            h.feed_u32(rule.id);
+            h.feed_u8(rule.priority);
+            h.feed_u64(rule.valid_from);
+            h.feed_u64(rule.valid_until);
+            h.feed_u32(effect_discriminant(rule.effect));
+            Self::feed_subject(&mut h, &rule.subject);
+            Self::feed_resource(&mut h, &rule.resource);
+            Self::feed_action(&mut h, &rule.action);
         }
-        [h1, h2]
+        h.finish()
+    }
+
+    /// Feed a `SubjectMatcher` as a tag byte followed by the raw
+    /// little-endian payload bytes of each field. Feeding raw bytes (rather
+    /// than collapsing multi-field payloads into a single derived integer)
+    /// preserves the full payload entropy so distinct payloads such as
+    /// `AddressRange(1, 31)` and `AddressRange(2, 0)` cannot collide.
+    fn feed_subject(h: &mut DualSip, s: &SubjectMatcher) {
+        match *s {
+            SubjectMatcher::Any => h.feed_u8(SUBJECT_TAG_ANY),
+            SubjectMatcher::AuthenticatedTester => h.feed_u8(SUBJECT_TAG_AUTH_TESTER),
+            SubjectMatcher::AuthenticatedWithLevel(level) => {
+                h.feed_u8(SUBJECT_TAG_AUTH_WITH_LEVEL);
+                h.feed_u8(auth_level_tag(level));
+            }
+            SubjectMatcher::SpecificAddress(addr) => {
+                h.feed_u8(SUBJECT_TAG_SPECIFIC_ADDRESS);
+                h.feed_u32(addr);
+            }
+            SubjectMatcher::AddressRange(lo, hi) => {
+                h.feed_u8(SUBJECT_TAG_ADDRESS_RANGE);
+                h.feed_u32(lo);
+                h.feed_u32(hi);
+            }
+            SubjectMatcher::EcuRole(role) => {
+                h.feed_u8(SUBJECT_TAG_ECU_ROLE);
+                h.feed_u8(role);
+            }
+        }
+    }
+
+    /// Feed a `ResourceMatcher` as tag + raw little-endian field bytes.
+    fn feed_resource(h: &mut DualSip, r: &ResourceMatcher) {
+        match *r {
+            ResourceMatcher::Any => h.feed_u8(RESOURCE_TAG_ANY),
+            ResourceMatcher::BusId(bt, bid) => {
+                h.feed_u8(RESOURCE_TAG_BUS_ID);
+                h.feed_u8(bt);
+                h.feed_u32(bid);
+            }
+            ResourceMatcher::DiagnosticService(sid) => {
+                h.feed_u8(RESOURCE_TAG_DIAG_SERVICE);
+                h.feed_u8(sid);
+            }
+            ResourceMatcher::ServiceRange(lo, hi) => {
+                h.feed_u8(RESOURCE_TAG_SERVICE_RANGE);
+                h.feed_u8(lo);
+                h.feed_u8(hi);
+            }
+            ResourceMatcher::FirmwareRegion(region) => {
+                h.feed_u8(RESOURCE_TAG_FIRMWARE_REGION);
+                h.feed_u8(region);
+            }
+        }
+    }
+
+    /// Feed an `ActionMatcher` as tag + raw little-endian field bytes.
+    fn feed_action(h: &mut DualSip, a: &ActionMatcher) {
+        match *a {
+            ActionMatcher::Any => h.feed_u8(ACTION_TAG_ANY),
+            ActionMatcher::Read => h.feed_u8(ACTION_TAG_READ),
+            ActionMatcher::Write => h.feed_u8(ACTION_TAG_WRITE),
+            ActionMatcher::Execute => h.feed_u8(ACTION_TAG_EXECUTE),
+            ActionMatcher::Transmit => h.feed_u8(ACTION_TAG_TRANSMIT),
+            ActionMatcher::DiagnosticRequest(sub) => {
+                h.feed_u8(ACTION_TAG_DIAG_REQUEST);
+                h.feed_u8(sub);
+            }
+        }
     }
 
     /// Returns `true` if the stored rule checksum matches a freshly computed one.
