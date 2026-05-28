@@ -44,4 +44,4 @@ assert!(integrity.first_tampered_seq.is_none());
 
 ## License
 
-Apache-2.0. See [LICENSE](../../LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
