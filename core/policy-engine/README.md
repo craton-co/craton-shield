@@ -65,4 +65,4 @@ let decision = engine.evaluate(&subject, &resource, &action, &env);
 
 ## License
 
-Apache-2.0. See [LICENSE](../../LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
