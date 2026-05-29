@@ -977,12 +977,26 @@ impl PolicyEngine {
     /// **genuinely independent** SipHash-2-4 lanes keyed with distinct key
     /// pairs ([`CHECKSUM_KEYS`]).
     ///
+    /// # What this guarantees
+    ///
     /// The two lanes are produced by SipHash-2-4 under unrelated keys, so —
     /// unlike a dual-FNV scheme where the second hash is an affine image of
     /// the first — the two 64-bit outputs are independent. The 128-bit
-    /// digest therefore provides a ~2^64 birthday bound against accidental
+    /// digest therefore provides a ~2^64 birthday bound against *accidental*
     /// collisions: it reliably detects bit flips, partial writes, truncated
     /// loads, and other in-memory corruption of the rule table.
+    ///
+    /// # What this does NOT guarantee
+    ///
+    /// This is a **corruption-detection** checksum, not an anti-tamper MAC.
+    /// The SipHash keys are compile-time constants compiled into the binary,
+    /// not a device-unique secret. An adversary who can modify `self.rules`
+    /// can equally recompute a matching checksum, so this construction does
+    /// **not** detect deliberate tampering by such an adversary. Defending
+    /// against that requires keying the hash with a secret the attacker
+    /// cannot read (e.g. a per-device key from secure storage); that key is
+    /// not available to this `no_std` library crate and must be supplied by
+    /// the integrating platform if anti-tamper is required.
     fn compute_checksum(&self) -> [u64; 2] {
         let mut h = DualSip::new();
 
@@ -1068,25 +1082,18 @@ impl PolicyEngine {
         }
     }
 
-    /// Returns `true` if the stored rule checksum matches a freshly computed one.
+    /// Returns `true` if the stored rule checksum matches a freshly computed
+    /// one — i.e. the rule table has not been corrupted since it was last
+    /// mutated.
     ///
-    /// Uses constant-time comparison to prevent timing side-channels that
-    /// could leak information about the stored checksum value.
+    /// This is an **integrity / corruption check**, not an anti-tamper
+    /// mechanism: see [`compute_checksum`](Self::compute_checksum) for the
+    /// precise threat model. Both the stored and the recomputed checksum are
+    /// derived from public data with no device-unique secret, so there is no
+    /// secret to protect — a plain (non-constant-time) comparison is used.
     #[must_use = "rule-checksum verification result must not be silently ignored"]
     pub fn verify_integrity(&self) -> bool {
-        let computed = self.compute_checksum();
-        let stored_bytes = [
-            self.rule_checksum[0].to_le_bytes(),
-            self.rule_checksum[1].to_le_bytes(),
-        ];
-        let computed_bytes = [computed[0].to_le_bytes(), computed[1].to_le_bytes()];
-        let mut s: [u8; 16] = [0; 16];
-        let mut c: [u8; 16] = [0; 16];
-        s[..8].copy_from_slice(&stored_bytes[0]);
-        s[8..].copy_from_slice(&stored_bytes[1]);
-        c[..8].copy_from_slice(&computed_bytes[0]);
-        c[8..].copy_from_slice(&computed_bytes[1]);
-        vs_types::constant_time_eq(&s, &c)
+        self.compute_checksum() == self.rule_checksum
     }
 
     /// Fires the audit callback if the rule has [`Effect::DenyAudit`].
@@ -3807,13 +3814,16 @@ mod tests {
     }
 
     #[test]
-    fn integrity_check_detects_tampering() {
+    fn integrity_check_detects_corruption() {
         let mut engine = PolicyEngine::new();
         engine.add_rule(make_rule(1, 1, Effect::Permit)).unwrap();
         assert!(engine.verify_integrity());
 
-        // Tamper with a rule field directly (simulating memory corruption
-        // or an attacker modifying rule storage).
+        // Mutate a rule field directly without going through a mutation
+        // method that recomputes the checksum. This simulates in-memory
+        // corruption (a bit flip / partial write). Note: `verify_integrity`
+        // detects *corruption*, not deliberate tampering by an adversary who
+        // could equally recompute the (secret-less) checksum.
         if let Some(ref mut rule) = engine.rules[0] {
             rule.effect = Effect::Deny;
         }
