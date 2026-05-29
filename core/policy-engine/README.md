@@ -32,35 +32,39 @@ use vs_policy_engine::{
     PolicyEngine, PolicyRule, Resource, ResourceMatcher, Subject, SubjectMatcher,
 };
 
-let mut engine = PolicyEngine::new();
-engine.add_rule(PolicyRule {
-    id: 1,
-    priority: 10,
-    effect: Effect::Deny,
-    subject: SubjectMatcher::Any,
-    resource: ResourceMatcher::DiagnosticService(0x34),
-    action: ActionMatcher::Any,
-    valid_from: 0,
-    valid_until: 0,
-})?;
+fn main() -> Result<(), vs_types::VsError> {
+    let mut engine = PolicyEngine::new();
+    engine.add_rule(PolicyRule {
+        id: 1,
+        priority: 10,
+        effect: Effect::Deny,
+        subject: SubjectMatcher::Any,
+        resource: ResourceMatcher::DiagnosticService(0x34),
+        action: ActionMatcher::Any,
+        valid_from: 0,
+        valid_until: 0,
+    })?;
 
-let subject = Subject {
-    address: 0x7E0,
-    authenticated: false,
-    ecu_role: 0,
-    session_token: 0,
-    auth_level: AuthenticationLevel::None,
-};
-let resource = Resource {
-    bus_type: None,
-    bus_id: None,
-    service_id: Some(0x34),
-    firmware_region: None,
-};
-let action = Action { action_type: ActionType::Read };
-let env = Environment { timestamp_us: 0 };
+    let subject = Subject {
+        address: 0x7E0,
+        authenticated: false,
+        ecu_role: 0,
+        session_token: 0,
+        auth_level: AuthenticationLevel::None,
+    };
+    let resource = Resource {
+        bus_type: None,
+        bus_id: None,
+        service_id: Some(0x34),
+        firmware_region: None,
+    };
+    let action = Action { action_type: ActionType::Read };
+    let env = Environment { timestamp_us: 0 };
 
-let decision = engine.evaluate(&subject, &resource, &action, &env);
+    let decision = engine.evaluate(&subject, &resource, &action, &env);
+    let _ = decision;
+    Ok(())
+}
 ```
 
 ## License
