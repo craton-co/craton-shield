@@ -375,6 +375,10 @@ impl<C: CryptoProvider> IntegrityMonitor<C> {
     ///   registered address.
     /// - [`VsError::CryptoError`] — hash computation failed.
     /// - [`VsError::ResourceExhausted`] — measurement counter saturated.
+    ///
+    /// The measurement counter is incremented on every verification
+    /// attempt that reaches the data check, including a length-mismatch
+    /// tamper, so a counter-based liveness check always observes the call.
     #[must_use = "integrity verification result must drive a security decision"]
     pub fn verify_region(
         &mut self,
@@ -390,6 +394,10 @@ impl<C: CryptoProvider> IntegrityMonitor<C> {
         }
 
         if current_data.len() != region.length {
+            // Count the verification attempt before reporting tamper, so a
+            // counter-based liveness/freshness check still observes that
+            // verification ran on this attacker-triggerable path.
+            self.increment_counter()?;
             self.fire_tamper(idx);
             return Ok(IntegrityResult {
                 region_id: id,
@@ -1440,7 +1448,7 @@ mod tests {
     }
 
     #[test]
-    fn measurement_counter_no_increment_on_length_mismatch() {
+    fn measurement_counter_increments_on_length_mismatch() {
         let mut monitor = IntegrityMonitor::new(TestCrypto::new());
         let data = b"Fixed length data";
 
@@ -1449,7 +1457,9 @@ mod tests {
 
         let result = monitor.verify_region(1, 0x1000, b"Short").expect("verify");
         assert_eq!(result.status, IntegrityStatus::Tampered);
-        assert_eq!(monitor.measurement_count(), 0);
+        // A length-mismatch tamper still counts as a verification attempt so
+        // counter-based liveness checks observe it.
+        assert_eq!(monitor.measurement_count(), 1);
     }
 
     #[test]
