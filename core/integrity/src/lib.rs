@@ -7,8 +7,9 @@
 //! # Public API (v1.0 stable)
 //!
 //! The `IntegrityMonitor` type, its `verify_region` / `register_region`
-//! methods, and the `IntegrityResult` / `MemoryRegion` types form the
-//! v1.0 stable surface and are governed by `DEPRECATION.md`.
+//! methods, and the `IntegrityResult` / `RegionInfo` types form the
+//! v1.0 stable surface; breaking changes follow the workspace
+//! semantic-versioning policy.
 
 use vs_crypto::{CryptoProvider, KeyId};
 use vs_types::{AlertSeverity, VsError};
