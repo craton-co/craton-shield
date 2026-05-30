@@ -13,8 +13,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-vs-types = { path = "../types" }
-vs-crypto = { path = "../crypto" }
+vs-types = { workspace = true }
+vs-crypto = { workspace = true }
 
 [lints]
 workspace = true
