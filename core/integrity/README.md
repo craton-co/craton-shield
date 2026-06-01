@@ -22,8 +22,8 @@ freshness tracking, and snapshot/restore for persistence across reboots.
 
 ## Usage
 
-```rust
-use vs_integrity::{IntegrityMonitor, IntegrityStatus, build_update_auth_message};
+```rust,ignore
+use vs_integrity::{IntegrityMonitor, IntegrityResult, IntegrityStatus, build_update_auth_message};
 
 // Create a monitor with your CryptoProvider.
 let mut monitor = IntegrityMonitor::new(crypto);
