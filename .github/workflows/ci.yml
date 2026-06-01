@@ -180,7 +180,7 @@ jobs:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@5a168576eaffe28a939e2b765e9cbea2d65f3f70 # v2.44.47
+        uses: taiki-e/install-action@e49978b799e49ff429d162b7a30601a569ab6538 # v2.81.1
         with:
           tool: cargo-llvm-cov
       - name: Generate coverage (default features)
