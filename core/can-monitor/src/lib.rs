@@ -707,10 +707,18 @@ const PAYLOAD_HASH_KEYS: [(u64, u64); 4] = [
 /// correlation. Uses 4 independent SipHash-2-4 lanes with different keys,
 /// producing a full 256-bit output with genuine independence between lanes.
 ///
+/// `len` is clamped to `data.len()`: if a caller passes a `len` larger than
+/// the supplied slice, only the available bytes are hashed rather than
+/// panicking. This keeps the function total — under the workspace
+/// `panic = "abort"` profile an out-of-bounds slice would otherwise abort
+/// the whole process on an automotive gateway.
+///
 /// Exposed publicly so that the automotive runtime can thread the same
 /// digest through to its own alert builders, avoiding a duplicate SHA-256
 /// computation on the CAN frame hot path (see `vs-runtime-auto::hash_or_degrade`).
+#[must_use]
 pub fn compute_can_payload_hash(data: &[u8], len: usize) -> vs_types::PayloadHash {
+    let len = len.min(data.len());
     vs_types::siphash_payload_hash(&data[..len], &PAYLOAD_HASH_KEYS)
 }
 
@@ -2653,6 +2661,26 @@ mod tests {
         // Since 8 <= max_dlc(8), this should NOT trigger a DLC alert.
         let frame = make_frame(0x100, 12, &[0x01; 8]);
         assert!(mon.process_frame(&frame, 0).is_none());
+    }
+
+    #[test]
+    fn compute_can_payload_hash_clamps_len() {
+        let data = [0xAAu8; 8];
+
+        // len == data.len(): hashes the whole slice.
+        let exact = compute_can_payload_hash(&data, 8);
+
+        // len > data.len(): must NOT panic; clamps to data.len() so the
+        // result equals the exact-length hash.
+        let over = compute_can_payload_hash(&data, 999);
+        assert_eq!(exact.0, over.0, "oversized len must clamp, not panic");
+
+        // len < data.len(): hashes only the requested prefix.
+        let short = compute_can_payload_hash(&data, 4);
+        assert_ne!(short.0, exact.0);
+
+        // Empty slice with non-zero len must also be safe.
+        let _ = compute_can_payload_hash(&[], 16);
     }
 
     #[test]
