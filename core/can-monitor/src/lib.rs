@@ -64,10 +64,19 @@ const STATS_CAPACITY: usize = 2048;
 #[cfg(feature = "capacity-xl")]
 const STATS_CAPACITY: usize = 4096;
 
-/// Default Shannon-entropy threshold (bits) above which a frame payload is
-/// flagged as potential fuzzing.  A perfectly random 8-byte payload has
-/// entropy ~3.0; legitimate signals are far lower.
-const ENTROPY_THRESHOLD: f32 = 3.5;
+/// Default *normalized* Shannon-entropy threshold above which a frame payload
+/// is flagged as potential fuzzing.
+///
+/// The detector compares `H / log2(n)` — a 0.0..=1.0 ratio of measured
+/// entropy to the maximum entropy attainable for an `n`-byte payload — rather
+/// than raw bits. A raw-bit threshold is meaningless across DLC sizes: a
+/// fully random 8-byte classic frame caps at `log2(8) = 3.0` bits while a
+/// random 64-byte CAN-FD frame reaches `log2(64) = 6.0` bits, so any single
+/// bit threshold either misses classic-CAN fuzzing or false-positives on FD.
+/// Normalizing makes the threshold uniform: `0.95` means "within 5% of the
+/// maximum entropy for this payload's length", which fires for both classic
+/// and FD fuzzing while leaving structured signals (far lower ratio) clear.
+const ENTROPY_THRESHOLD: f32 = 0.95;
 
 /// CAN bus error count above which we declare a bus-off condition.
 const BUS_OFF_ERROR_THRESHOLD: u32 = 255;
@@ -102,8 +111,12 @@ const CAN_ID_STANDARD_MAX: u32 = 0x7FF;
 /// Maximum valid extended (29-bit) CAN ID.
 const CAN_ID_EXTENDED_MAX: u32 = 0x1FFF_FFFF;
 
-/// Maximum Shannon entropy for CAN payloads (log2(256) = 8.0 bits).
-const ENTROPY_MAX: f32 = 8.0;
+/// Maximum value of the normalized entropy ratio (`H / log2(n)`).
+///
+/// The ratio is bounded by 1.0 (a payload with all-distinct bytes reaches
+/// its per-length maximum entropy), so the configurable threshold is also
+/// capped at 1.0.
+const ENTROPY_MAX: f32 = 1.0;
 
 /// Number of identical-payload repeats before a replay alert fires, and the
 /// interval at which subsequent re-alerts are emitted.
@@ -848,9 +861,14 @@ impl CanMonitor {
 
     /// Override the default entropy threshold used for fuzzing detection.
     ///
-    /// The threshold must be in the range `0.0..=8.0` (max Shannon entropy
-    /// for a byte-level distribution).  Returns `Err(VsError::InvalidInput)`
-    /// for out-of-range, `NaN`, or infinite values.
+    /// The threshold is a *normalized* entropy ratio and must be in the
+    /// range `0.0..=1.0`. The detector flags a frame when `H / log2(n)`
+    /// (measured Shannon entropy over the maximum attainable for an
+    /// `n`-byte payload) exceeds the threshold. `1.0` disables the detector
+    /// in practice (only an all-distinct payload reaches the maximum).
+    ///
+    /// Returns `Err(VsError::InvalidInput)` for out-of-range, `NaN`, or
+    /// infinite values.
     pub fn set_entropy_threshold(&mut self, threshold: f32) -> Result<(), VsError> {
         if threshold.is_nan()
             || threshold.is_infinite()
@@ -1021,7 +1039,11 @@ impl CanMonitor {
         // rule loop so it is computed at most once per frame, not once per
         // matching rule.  Same for the payload length, which feeds both the
         // DLC-anomaly comparison and the entropy slice.
-        let entropy = Self::shannon_entropy_small(&frame.data[..plen]);
+        //
+        // The fuzzing detector compares a *normalized* ratio (H / log2(n))
+        // so that the threshold is uniform across DLC sizes; see
+        // `shannon_entropy_ratio`.
+        let entropy_ratio = Self::shannon_entropy_ratio(&frame.data[..plen]);
         let plen_u8 = plen as u8;
 
         // Evaluate every active rule (flood, DLC, entropy).
@@ -1062,8 +1084,8 @@ impl CanMonitor {
                 break;
             }
 
-            // 4) Fuzzing (entropy) — value precomputed above.
-            if entropy > self.entropy_threshold {
+            // 4) Fuzzing (entropy) — normalized ratio precomputed above.
+            if entropy_ratio > self.entropy_threshold {
                 rule_alert = Some(self.make_alert_with_payload(
                     rule.severity,
                     eid,
@@ -1234,8 +1256,46 @@ impl CanMonitor {
                 sum_c_log2_c += C_LOG2_C_TABLE[c];
             }
         }
-        log2_approx_positive(n as f32) - sum_c_log2_c / n as f32
+        // Use the exact `log2(n)` table for the CAN/CAN-FD range (n ≤ 64)
+        // instead of the IEEE-754 bit-trick approximation, which carries up
+        // to ~0.09 bits of error — too coarse to feed a security threshold.
+        log2_exact_small(n) - sum_c_log2_c / n as f32
     }
+
+    /// Shannon entropy of `data` *normalized* to a 0.0..=1.0 ratio.
+    ///
+    /// Returns `H / log2(n)` where `H` is the raw Shannon entropy in bits
+    /// and `log2(n)` is the maximum entropy attainable for an `n`-byte
+    /// payload. This makes the fuzzing threshold uniform across DLC sizes:
+    /// a fully random 8-byte classic frame and a fully random 64-byte
+    /// CAN-FD frame both yield a ratio near 1.0, whereas a raw-bits
+    /// comparison would only ever flag the latter.
+    ///
+    /// Payloads of length 0 or 1 carry no entropy and return `0.0` (there
+    /// is no `log2(n)` to normalize against — fail-closed: never flag).
+    fn shannon_entropy_ratio(data: &[u8]) -> f32 {
+        let n = data.len();
+        if n <= 1 {
+            return 0.0;
+        }
+        let max_entropy = if n <= 64 {
+            log2_exact_small(n)
+        } else {
+            log2_approx_positive(n as f32)
+        };
+        // `n >= 2` guarantees `max_entropy > 0`, so the division is safe.
+        Self::shannon_entropy_small(data) / max_entropy
+    }
+}
+
+/// Exact `log2(n)` for `n` in `0..=64`, served from a precomputed table.
+///
+/// Used on the CAN/CAN-FD entropy hot path so that the `log2(n)` term of
+/// the Shannon-entropy formula carries no approximation error. `n == 0`
+/// returns `0.0` (callers guard against empty payloads independently).
+fn log2_exact_small(n: usize) -> f32 {
+    debug_assert!(n <= 64, "log2_exact_small only covers n <= 64");
+    LOG2_TABLE[n.min(64)]
 }
 
 /// Approximate `log2(x)` for any positive `x` using the IEEE 754 bit trick.
@@ -1326,6 +1386,82 @@ const C_LOG2_C_TABLE: [f32; 65] = {
     ]
 };
 
+/// Precomputed exact `log2(n)` for `n = 0..=64` (rounded to `f32`).
+///
+/// Entry 0 is `0.0` (a sentinel — `log2(0)` is undefined and callers never
+/// index it for a real entropy computation). Used by [`log2_exact_small`]
+/// to give the entropy formula's `log2(n)` term an exact value on the
+/// CAN/CAN-FD hot path, replacing the lower-accuracy bit-trick approximation
+/// for that term so the security threshold is not subject to ~0.09-bit drift.
+#[allow(clippy::excessive_precision)]
+const LOG2_TABLE: [f32; 65] = [
+    0.000_000_00, // 0
+    0.000_000_00, // 1
+    1.000_000_00, // 2
+    1.584_962_50, // 3
+    2.000_000_00, // 4
+    2.321_928_09, // 5
+    2.584_962_50, // 6
+    2.807_354_92, // 7
+    3.000_000_00, // 8
+    3.169_925_00, // 9
+    3.321_928_09, // 10
+    3.459_431_62, // 11
+    3.584_962_50, // 12
+    3.700_439_72, // 13
+    3.807_354_92, // 14
+    3.906_890_60, // 15
+    4.000_000_00, // 16
+    4.087_462_84, // 17
+    4.169_925_00, // 18
+    4.247_927_51, // 19
+    4.321_928_09, // 20
+    4.392_317_42, // 21
+    4.459_431_62, // 22
+    4.523_561_96, // 23
+    4.584_962_50, // 24
+    4.643_856_19, // 25
+    4.700_439_72, // 26
+    4.754_887_50, // 27
+    4.807_354_92, // 28
+    4.857_981_00, // 29
+    4.906_890_60, // 30
+    4.954_196_31, // 31
+    5.000_000_00, // 32
+    5.044_394_12, // 33
+    5.087_462_84, // 34
+    5.129_283_02, // 35
+    5.169_925_00, // 36
+    5.209_453_37, // 37
+    5.247_927_51, // 38
+    5.285_402_22, // 39
+    5.321_928_09, // 40
+    5.357_552_00, // 41
+    5.392_317_42, // 42
+    5.426_264_75, // 43
+    5.459_431_62, // 44
+    5.491_853_10, // 45
+    5.523_561_96, // 46
+    5.554_588_85, // 47
+    5.584_962_50, // 48
+    5.614_709_84, // 49
+    5.643_856_19, // 50
+    5.672_425_34, // 51
+    5.700_439_72, // 52
+    5.727_920_45, // 53
+    5.754_887_50, // 54
+    5.781_359_71, // 55
+    5.807_354_92, // 56
+    5.832_890_01, // 57
+    5.857_981_00, // 58
+    5.882_643_05, // 59
+    5.906_890_60, // 60
+    5.930_737_34, // 61
+    5.954_196_31, // 62
+    5.977_279_92, // 63
+    6.000_000_00, // 64
+];
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1415,7 +1551,9 @@ mod tests {
         let mut mon = CanMonitor::default();
         mon.add_rule(exact_id_rule(0x100, 1_000, 8)).ok();
 
-        let frame = make_frame(0x100, 8, &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+        // Structured low-entropy payload — representative of a real signal
+        // frame (a few repeated byte values), well below the fuzzing ratio.
+        let frame = make_frame(0x100, 8, &[0x00, 0x00, 0x01, 0x00, 0xFF, 0x00, 0x00, 0x00]);
         // First frame – no previous timestamp to compare
         assert!(mon.process_frame(&frame, 0).is_none());
         // Second frame at safe interval
@@ -1492,10 +1630,10 @@ mod tests {
     fn high_entropy_triggers_fuzzing_alert() {
         let mut mon = CanMonitor::default();
         mon.add_rule(exact_id_rule(0x300, 0, 8)).ok();
-        // Very low entropy threshold so our payload triggers it
-        mon.set_entropy_threshold(1.0).ok();
+        // Low normalized-entropy ratio threshold so our payload triggers it.
+        mon.set_entropy_threshold(0.5).ok();
 
-        // Each byte is unique → high entropy
+        // Each byte is unique → maximum entropy for the length → ratio 1.0.
         let frame = make_frame(0x300, 8, &[0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]);
         let alert = mon.process_frame(&frame, 0);
         assert!(alert.is_some());
@@ -1505,10 +1643,10 @@ mod tests {
     fn low_entropy_does_not_trigger() {
         let mut mon = CanMonitor::default();
         mon.add_rule(exact_id_rule(0x300, 0, 8)).ok();
-        // threshold well above what a constant payload can produce
-        mon.set_entropy_threshold(1.0).ok();
+        // Ratio threshold well above what a constant payload can produce.
+        mon.set_entropy_threshold(0.5).ok();
 
-        // All identical bytes → entropy = 0
+        // All identical bytes → entropy ratio = 0.
         let frame = make_frame(0x300, 8, &[0xAA; 8]);
         assert!(mon.process_frame(&frame, 0).is_none());
     }
@@ -2082,8 +2220,8 @@ mod tests {
             severity: AlertSeverity::Low,
         })
         .ok();
-        // Very high threshold so entropy doesn't trigger
-        mon.set_entropy_threshold(8.0).ok();
+        // Max ratio threshold so entropy doesn't trigger.
+        mon.set_entropy_threshold(1.0).ok();
 
         let mut frame = CanFrame {
             id: 0x400,
@@ -2319,7 +2457,7 @@ mod tests {
         let mut mon = CanMonitor::default();
         mon.allow_id(0x100).ok();
         mon.add_rule(exact_id_rule(0x100, 10_000, 8)).ok();
-        mon.set_entropy_threshold(3.5).ok();
+        mon.set_entropy_threshold(0.95).ok();
 
         let frame = make_frame(0x100, 8, &[0x01; 8]);
         // First frame — no alert from any detector.
@@ -2461,28 +2599,50 @@ mod tests {
 
     #[test]
     fn security_entropy_threshold_constant() {
-        // Security property: entropy threshold for fuzzing detection is 3.5 bits.
-        // Lowering this could cause false positives; raising it weakens detection.
-        assert!((ENTROPY_THRESHOLD - 3.5).abs() < f32::EPSILON);
+        // Security property: the fuzzing detector compares a *normalized*
+        // entropy ratio (H / log2(n)), not raw bits. The default threshold
+        // is a 0.0..=1.0 ratio.
+        assert!(ENTROPY_THRESHOLD > 0.0 && ENTROPY_THRESHOLD <= 1.0);
 
-        // Classic CAN (8 bytes, 8 distinct) → entropy = log2(8) = 3.0 < threshold.
-        // This is intentional: classic CAN payloads should never trigger.
-        let classic_payload = [0u8, 1, 2, 3, 4, 5, 6, 7];
-        let classic_entropy = CanMonitor::shannon_entropy(&classic_payload);
+        // Regression for the old dead-detector bug: a fully random 8-byte
+        // *classic* CAN payload caps at log2(8)=3.0 raw bits — below the
+        // old 3.5-bit threshold, so classic-CAN fuzzing was never flagged.
+        // The normalized ratio reaches 1.0 and MUST exceed the threshold.
+        let classic_random = [0u8, 1, 2, 3, 4, 5, 6, 7];
+        let classic_ratio = CanMonitor::shannon_entropy_ratio(&classic_random);
         assert!(
-            classic_entropy < ENTROPY_THRESHOLD,
-            "classic CAN max entropy ({classic_entropy}) must be below threshold ({ENTROPY_THRESHOLD})"
+            classic_ratio > ENTROPY_THRESHOLD,
+            "max-entropy classic CAN payload (ratio {classic_ratio}) must exceed threshold ({ENTROPY_THRESHOLD})"
         );
 
-        // CAN-FD (16+ distinct bytes) → entropy > 3.5, should trigger.
-        let fd_random: [u8; 16] = [
-            0x1F, 0xA7, 0x3C, 0xE9, 0x54, 0xB2, 0x6D, 0x80, 0xC1, 0x08, 0x47, 0xDE, 0x93, 0x2B,
-            0xF5, 0x74,
-        ];
-        let fd_entropy = CanMonitor::shannon_entropy(&fd_random);
+        // A fully random 64-byte CAN-FD payload also reaches ratio ~1.0.
+        let fd_random: [u8; 64] = core::array::from_fn(|i| i as u8);
+        let fd_ratio = CanMonitor::shannon_entropy_ratio(&fd_random);
         assert!(
-            fd_entropy > ENTROPY_THRESHOLD,
-            "CAN-FD fuzzing payload ({fd_entropy}) should exceed threshold ({ENTROPY_THRESHOLD})"
+            fd_ratio > ENTROPY_THRESHOLD,
+            "max-entropy CAN-FD payload (ratio {fd_ratio}) must exceed threshold ({ENTROPY_THRESHOLD})"
+        );
+
+        // Structured low-entropy traffic stays well below the threshold.
+        let structured = [0xAAu8, 0xAA, 0xAA, 0xAA, 0xBB, 0xBB, 0xBB, 0xBB];
+        let structured_ratio = CanMonitor::shannon_entropy_ratio(&structured);
+        assert!(
+            structured_ratio < ENTROPY_THRESHOLD,
+            "structured payload (ratio {structured_ratio}) must stay below threshold"
+        );
+    }
+
+    #[test]
+    fn classic_can_fuzzing_is_detected_end_to_end() {
+        // End-to-end regression for H2: an 8-byte classic CAN frame with
+        // all-distinct bytes is the worst-case fuzzing payload and must
+        // raise an alert at the default threshold.
+        let mut mon = CanMonitor::default();
+        mon.add_rule(exact_id_rule(0x123, 0, 8)).ok();
+        let frame = make_frame(0x123, 8, &[0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]);
+        assert!(
+            mon.process_frame(&frame, 0).is_some(),
+            "classic-CAN fuzzing must be flagged by the entropy detector"
         );
     }
 
@@ -2546,16 +2706,19 @@ mod tests {
 
     #[test]
     fn entropy_threshold_accepts_valid_range() {
+        // The threshold is a normalized 0.0..=1.0 ratio.
         let mut mon = CanMonitor::default();
         assert!(mon.set_entropy_threshold(0.0).is_ok());
-        assert!(mon.set_entropy_threshold(4.0).is_ok());
-        assert!(mon.set_entropy_threshold(8.0).is_ok());
+        assert!(mon.set_entropy_threshold(0.5).is_ok());
+        assert!(mon.set_entropy_threshold(1.0).is_ok());
     }
 
     #[test]
     fn entropy_threshold_rejects_above_max() {
+        // Ratios above 1.0 are not attainable and must be rejected.
         let mut mon = CanMonitor::default();
-        assert_eq!(mon.set_entropy_threshold(8.1), Err(VsError::InvalidInput));
+        assert_eq!(mon.set_entropy_threshold(1.1), Err(VsError::InvalidInput));
+        assert_eq!(mon.set_entropy_threshold(3.5), Err(VsError::InvalidInput));
     }
 
     #[test]
