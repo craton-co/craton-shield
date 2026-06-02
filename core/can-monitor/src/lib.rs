@@ -551,23 +551,6 @@ impl ReplayTracker {
         oldest_idx
     }
 
-    /// Reset replay state for a given ID.  Called when another detector
-    /// (flood, DLC, entropy) fires, so that the replay counter restarts
-    /// from scratch for subsequent frames.
-    fn reset(&mut self, id: u32) {
-        let start = self.id_hash(id);
-        for probe in 0..REPLAY_CAPACITY {
-            let idx = (start + probe) & (REPLAY_CAPACITY - 1);
-            if self.entries[idx].occupied && self.entries[idx].id == id {
-                self.entries[idx].repeat_count = 0;
-                return;
-            }
-            if !self.entries[idx].occupied {
-                return;
-            }
-        }
-    }
-
     /// Returns the number of evictions since last reset.
     pub fn eviction_count(&self) -> u32 {
         self.eviction_count
@@ -1097,10 +1080,14 @@ impl CanMonitor {
             }
         }
 
-        // If another detector fired, reset the replay counter for this ID
-        // so that subsequent frames start fresh.
+        // If another detector fired, return that alert but leave replay
+        // state untouched. Resetting the replay counter here would let an
+        // attacker suppress the sustained-replay detector entirely by
+        // interleaving a single flood/DLC/entropy-anomalous frame between
+        // replayed frames — a distinct detector must never be defeatable
+        // by deliberately tripping another one. Replay state is therefore
+        // kept independent of the other detectors.
         if let Some(alert) = rule_alert {
-            self.replay_tracker.reset(eid);
             return Some(alert);
         }
 
@@ -2413,6 +2400,37 @@ mod tests {
         // 3rd — repeat_count=3, triggers replay alert.
         let alert = mon.process_frame(&frame, 20_000);
         assert!(alert.is_some());
+        assert_eq!(alert.unwrap().severity, AlertSeverity::Medium);
+    }
+
+    #[test]
+    fn replay_not_suppressed_by_interleaved_alert() {
+        // Regression for H4: an attacker must not be able to defeat the
+        // sustained-replay detector by interleaving a frame that trips
+        // another detector. Replay state is independent and persists
+        // across frames that raise flood/DLC/entropy alerts.
+        let mut mon = CanMonitor::default();
+        // Rule: no flood limit, DLC capped at 4.
+        mon.add_rule(exact_id_rule(0x100, 0, 4)).ok();
+
+        let replay = make_frame(0x100, 4, &[0xAA; 4]);
+        // Same ID, oversized DLC -> always raises a DLC-anomaly alert.
+        let dlc_anomaly = make_frame(0x100, 8, &[0xAA; 8]);
+
+        // replay #1 -> repeat_count = 1
+        assert!(mon.process_frame(&replay, 0).is_none());
+        // interleaved DLC alert (would previously reset replay state)
+        assert!(mon.process_frame(&dlc_anomaly, 10_000).is_some());
+        // replay #2 -> repeat_count = 2
+        assert!(mon.process_frame(&replay, 20_000).is_none());
+        // another interleaved DLC alert
+        assert!(mon.process_frame(&dlc_anomaly, 30_000).is_some());
+        // replay #3 -> repeat_count = 3 -> sustained-replay alert MUST fire
+        let alert = mon.process_frame(&replay, 40_000);
+        assert!(
+            alert.is_some(),
+            "interleaved alerts must not suppress replay detection"
+        );
         assert_eq!(alert.unwrap().severity, AlertSeverity::Medium);
     }
 
