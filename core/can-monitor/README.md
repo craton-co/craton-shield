@@ -22,7 +22,15 @@ Linux automotive gateways.
 
 ## Feature Flags
 
-See [docs/feature-flags.md](../../docs/feature-flags.md) for the full reference.
+| Flag | Effect |
+|:-----|:-------|
+| _(default)_ | Base capacity tier: 256 rules, 1024 tracked IDs, 512 allowlist entries, 256 replay counters. |
+| `capacity-large` | Doubles every capacity tier (512 / 2048 / 1024 / 512). |
+| `capacity-xl` | Quadruples every capacity tier (1024 / 4096 / 2048 / 1024). Takes precedence over `capacity-large` if both are set. |
+| `testing` | Exposes the internal entropy helpers via `testing_internals` for benches/integration tests. Not for production builds. |
+
+`capacity-large` and `capacity-xl` are mutually exclusive by design; enabling
+both selects the `capacity-xl` tier.
 
 ## Usage
 
