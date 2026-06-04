@@ -34,7 +34,7 @@ both selects the `capacity-xl` tier.
 
 ## Usage
 
-```rust
+```no_run
 use vs_can_monitor::{CanMonitor, CanFrame, CanRule};
 use vs_types::AlertSeverity;
 
@@ -42,8 +42,11 @@ use vs_types::AlertSeverity;
 // In production, source from `CryptoProvider::random_bytes()`.
 let replay_key: [u8; 16] = [0xAB; 16];
 let mut monitor = CanMonitor::try_new(replay_key).expect("non-zero key");
+
+// `id` is a caller-assigned handle used by `remove_rule`; `id_filter`
+// (masked by `id_mask`) is what the rule matches against incoming frames.
 monitor.add_rule(CanRule {
-    id: 0,
+    id: 1,
     id_mask: 0x7FF,
     id_filter: 0x100,
     min_interval_us: 10_000,
@@ -56,8 +59,14 @@ let frame = CanFrame {
     id: 0x100, dlc: 8, data: [0u8; 64],
     is_extended: false, is_fd: false,
 };
-let alerts = monitor.process_frame(&frame, timestamp_us);
+let timestamp_us: u64 = 0;
+// `process_frame` returns `Option<SecurityAlert>` — at most one alert per frame.
+let alert = monitor.process_frame(&frame, timestamp_us);
 ```
+
+`CanMonitor` is single-threaded: every method takes `&mut self` and the type
+has no interior mutability. Callers sharing one monitor between an ISR and a
+thread context must provide external synchronization.
 
 ## License
 
