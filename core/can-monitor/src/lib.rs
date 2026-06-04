@@ -7,11 +7,12 @@
 //!
 //! # Public API
 //!
-//! Pre-1.0 (workspace version 0.7.0); API may change before 1.0. The
+//! Pre-1.0 (workspace version 0.7.1); API may change before 1.0. The
 //! `CanMonitor` type, its `try_new` / `add_rule` / `process_frame`
 //! methods, and the `CanFrame` / `CanRule` types form the in-progress
-//! public surface and are governed by `DEPRECATION.md`. The
-//! `new_with_replay_key` alias was removed in an earlier breaking pass.
+//! public surface and are governed by the workspace-root `DEPRECATION.md`
+//! policy document. The `new_with_replay_key` alias was removed in an
+//! earlier pre-1.0 breaking pass.
 
 use vs_types::{AlertSeverity, SecurityAlert, VsError, SOURCE_CAN};
 
@@ -2904,9 +2905,10 @@ mod tests {
         assert!(tracker.eviction_count() > 0);
     }
 
-    // `new_with_replay_key_creates_functional_monitor` was removed in
-    // v1.0.0 along with the deprecated `new_with_replay_key` alias.
-    // `CanMonitor::new(replay_key)` covers the same construction path.
+    // `new_with_replay_key_creates_functional_monitor` was removed in an
+    // earlier pre-1.0 breaking pass along with the deprecated
+    // `new_with_replay_key` alias. `CanMonitor::try_new(replay_key)` covers
+    // the same construction path.
 
     #[test]
     fn different_replay_keys_produce_different_hashes() {
