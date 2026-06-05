@@ -1381,7 +1381,9 @@ const C_LOG2_C_TABLE: [f32; 65] = {
 /// to give the entropy formula's `log2(n)` term an exact value on the
 /// CAN/CAN-FD hot path, replacing the lower-accuracy bit-trick approximation
 /// for that term so the security threshold is not subject to ~0.09-bit drift.
-#[allow(clippy::excessive_precision)]
+// `clippy::approx_constant` fires on entry 10 (`log2(10)`), which here is a
+// genuine lookup-table value, not an attempt to spell a named constant.
+#[allow(clippy::excessive_precision, clippy::approx_constant)]
 const LOG2_TABLE: [f32; 65] = [
     0.000_000_00, // 0
     0.000_000_00, // 1
