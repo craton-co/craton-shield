@@ -2895,13 +2895,13 @@ mod tests {
     #[test]
     fn eviction_counter_increments() {
         let mut tracker = ReplayTracker::with_key([0xDEAD_BEEF_CAFE_BABE, 0x0123_4567_89AB_CDEF]);
-        // Fill all 256 slots
-        for i in 0..256u32 {
+        // Fill every replay slot (capacity varies by `capacity-*` feature).
+        for i in 0..REPLAY_CAPACITY as u32 {
             tracker.check(i, &[i as u8]);
         }
         tracker.reset_eviction_count();
-        // Next insert should evict
-        tracker.check(999, &[0xFF]);
+        // Next insert (a fresh ID beyond capacity) must evict.
+        tracker.check(REPLAY_CAPACITY as u32 + 1, &[0xFF]);
         assert!(tracker.eviction_count() > 0);
     }
 
@@ -2939,11 +2939,15 @@ mod tests {
     #[test]
     fn allowlist_full_capacity() {
         let mut mon = CanMonitor::default();
-        for i in 0..512u32 {
+        // Capacity varies by `capacity-*` feature — use the constant.
+        for i in 0..ALLOWLIST_CAPACITY as u32 {
             assert!(mon.allow_id(i).is_ok());
         }
-        // 513th should fail
-        assert_eq!(mon.allow_id(999), Err(VsError::ResourceExhausted));
+        // One past capacity must fail.
+        assert_eq!(
+            mon.allow_id(ALLOWLIST_CAPACITY as u32),
+            Err(VsError::ResourceExhausted)
+        );
     }
 
     #[test]
@@ -3124,9 +3128,9 @@ mod tests {
         mon.add_rule(rule).unwrap();
 
         // Flood with far more distinct extended CAN IDs than STATS_CAPACITY
-        // (1024). 4096 distinct IDs guarantees the table fills and the
-        // LFU-eviction path is exercised many times.
-        for i in 0..4096u32 {
+        // (capacity varies by `capacity-*` feature). 2x capacity guarantees
+        // the table fills and the LFU-eviction path is exercised many times.
+        for i in 0..(STATS_CAPACITY as u32 * 2) {
             let frame = CanFrame {
                 id: i,
                 is_extended: true,
