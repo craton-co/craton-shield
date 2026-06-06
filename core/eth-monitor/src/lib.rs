@@ -962,23 +962,51 @@ impl EthMonitor {
             return Some(alert);
         }
 
-        // 3. Port-based protocol discrimination: route to the correct
-        //    checker based on dst_port. Only check each protocol once.
-        match pkt.dst_port {
-            Some(DOIP_TCP_PORT) => return self.check_doip(pkt, ts_us),
-            Some(SOMEIP_UDP_PORT) => return self.check_someip(pkt, ts_us),
-            _ => {
-                // Unknown port — try both, DoIP first (critical severity).
-                if let Some(alert) = self.check_doip(pkt, ts_us) {
-                    return Some(alert);
-                }
-                if let Some(alert) = self.check_someip(pkt, ts_us) {
-                    return Some(alert);
-                }
-            }
+        // 3. Protocol discrimination.
+        //
+        // The SOME/IP and DoIP checkers operate on an *already-stripped*
+        // L4 payload and a confirmed transport port. There are two ways
+        // the caller can present a packet:
+        //
+        //   a) `dst_port` is `Some(_)` — the caller has already stripped
+        //      the L3/L4 headers and `payload` is the L4 payload. We
+        //      dispatch directly on the supplied port.
+        //   b) `dst_port` is `None` — `payload` is the raw IP packet
+        //      (the EthPacket contract: payload follows the Ethernet
+        //      header). We parse L3/L4 ourselves via `parse_ip` /
+        //      `parse_transport`, derive the real transport port, and
+        //      dispatch on the stripped L4 payload.
+        //
+        // Fail closed: if the protocol cannot be positively identified
+        // (non-IP EtherType, truncated/unparseable headers, or a
+        // non-TCP/UDP transport) no SOME/IP/DoIP check runs. This avoids
+        // re-interpreting arbitrary bytes as a protocol header.
+        if let Some(port) = pkt.dst_port {
+            self.dispatch_protocol(pkt, port, ts_us)
+        } else {
+            let (stripped, port) = strip_l3_l4(pkt.ethertype, pkt.payload)?;
+            let derived = EthPacket {
+                dst_port: Some(port),
+                payload: stripped,
+                ..*pkt
+            };
+            self.dispatch_protocol(&derived, port, ts_us)
         }
+    }
 
-        None
+    /// Dispatch a packet whose transport `port` and (in `pkt.payload`)
+    /// stripped L4 payload are known to the matching protocol checker.
+    fn dispatch_protocol(
+        &mut self,
+        pkt: &EthPacket<'_>,
+        port: u16,
+        ts_us: u64,
+    ) -> Option<SecurityAlert> {
+        match port {
+            DOIP_TCP_PORT => self.check_doip(pkt, ts_us),
+            SOMEIP_UDP_PORT => self.check_someip(pkt, ts_us),
+            _ => None,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -2004,6 +2032,41 @@ pub fn parse_transport(
     }
 }
 
+/// Strip the L3 (IP) and L4 (TCP/UDP) headers from a raw IP packet,
+/// returning the L4 payload slice and the transport destination port.
+///
+/// Used by [`EthMonitor::inspect_packet`] to derive the protocol
+/// dispatch key (`dst_port`) and the stripped payload internally when
+/// the caller did not pre-populate `EthPacket::dst_port`.
+///
+/// Returns `None` (fail closed) when:
+///   - the EtherType is not IPv4/IPv6,
+///   - the IP header is truncated or malformed,
+///   - the transport protocol is not TCP or UDP,
+///   - the transport header is truncated, or
+///   - the computed L4 offset would exceed the buffer.
+fn strip_l3_l4(ethertype: u16, payload: &[u8]) -> Option<(&[u8], u16)> {
+    let (ip_hdr, l4_offset) = parse_ip(ethertype, payload)?;
+    let transport = parse_transport(ip_hdr.protocol, payload, l4_offset)?;
+    // Compute the L4 header length so the payload can be stripped down
+    // to the upper-layer message (SOME/IP / DoIP).
+    let l4_hdr_len = match ip_hdr.protocol {
+        IpProtocol::Udp => UDP_HEADER_LEN,
+        IpProtocol::Tcp => {
+            // TCP data offset is in the high nibble of byte 12, measured
+            // in 32-bit words. Bounded to >= TCP_MIN_HEADER_LEN so a
+            // crafted small data-offset cannot under-strip the header.
+            let data_off_byte = *payload.get(l4_offset.checked_add(12)?)?;
+            let words = (data_off_byte >> 4) as usize;
+            (words * 4).max(TCP_MIN_HEADER_LEN)
+        }
+        _ => return None,
+    };
+    let payload_start = l4_offset.checked_add(l4_hdr_len)?;
+    let stripped = payload.get(payload_start..)?;
+    Some((stripped, transport.dst_port))
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -2503,7 +2566,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 1400);
@@ -2593,7 +2656,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &routing_req,
         };
         assert!(mon.inspect_packet(&pkt_req, 1700).is_none());
@@ -2605,7 +2668,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &diag,
         };
         let alert = mon.inspect_packet(&pkt_diag, 1701);
@@ -2623,7 +2686,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 1800);
@@ -2641,7 +2704,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 1900);
@@ -2694,7 +2757,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &payload,
         };
         // Should not alert — malformed header is silently ignored.
@@ -3428,7 +3491,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 100).unwrap();
@@ -3479,7 +3542,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &payload,
         };
         // Malformed → silently ignored (no alert)
@@ -3721,7 +3784,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt, 100).is_none());
@@ -3737,7 +3800,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(DOIP_TCP_PORT),
             payload: &payload,
         };
         // Should not alert — routing request is fine
@@ -5154,35 +5217,81 @@ mod tests {
         );
     }
 
-    /// A `DoIP` activation request without a `dst_port` cannot bind to
-    /// a TCP tuple and must not create a session.
-    #[test]
-    fn regression_doip_activation_without_dst_port_creates_no_session() {
-        let mut mon = default_monitor();
-        let req = make_doip_payload(0x02, DOIP_ROUTING_ACTIVATION_REQUEST, 0);
-        let pkt_req = EthPacket {
-            src_mac: MAC_A,
-            dst_mac: MAC_B,
-            vlan_id: None,
-            ethertype: 0x0800,
-            dst_port: None,
-            payload: &req,
-        };
-        assert!(mon.inspect_packet(&pkt_req, 100).is_none());
+    /// Wrap an 8-byte+ DoIP message in a minimal IPv4 + TCP frame so
+    /// `inspect_packet` must derive the transport port via its internal
+    /// L3/L4 parser (the `dst_port: None` path). `dst_port` selects the
+    /// TCP destination port written into the frame.
+    fn make_doip_over_ipv4_tcp(doip: &[u8], dst_port: u16) -> [u8; 64] {
+        let mut pkt = [0u8; 64];
+        // IPv4 header (20 bytes, IHL=5).
+        pkt[0] = 0x45;
+        let total_len = (40 + doip.len()) as u16;
+        pkt[2..4].copy_from_slice(&total_len.to_be_bytes());
+        pkt[9] = 6; // protocol = TCP
+        pkt[12..16].copy_from_slice(&[10, 0, 0, 1]);
+        pkt[16..20].copy_from_slice(&[10, 0, 0, 2]);
+        // TCP header (20 bytes, data offset = 5 words).
+        pkt[22..24].copy_from_slice(&dst_port.to_be_bytes());
+        pkt[32] = 5 << 4; // data offset nibble
+        // DoIP payload at offset 40.
+        pkt[40..40 + doip.len()].copy_from_slice(doip);
+        pkt
+    }
 
-        // Diagnostic with the same (missing) dst_port must NOT be
-        // authorised — unbound sessions cannot exist.
+    /// Regression (H2): `inspect_packet` must wire the L3/L4 parsers into
+    /// protocol dispatch. A real IPv4 + TCP frame carrying a DoIP
+    /// diagnostic — presented with `dst_port: None` so the monitor must
+    /// strip L3/L4 itself — must be routed to `check_doip` on the
+    /// derived port and flagged `DOIP_UNAUTH` when no session exists.
+    #[test]
+    fn regression_inspect_packet_derives_doip_port_from_l3_l4() {
+        let mut mon = default_monitor();
         let diag = make_doip_payload(0x02, DOIP_DIAGNOSTIC_MESSAGE, 0);
-        let pkt_diag = EthPacket {
+        let frame = make_doip_over_ipv4_tcp(&diag, DOIP_TCP_PORT);
+        let pkt = EthPacket {
             src_mac: MAC_A,
             dst_mac: MAC_B,
             vlan_id: None,
-            ethertype: 0x0800,
-            dst_port: None,
-            payload: &diag,
+            ethertype: ETHERTYPE_IPV4,
+            dst_port: None, // monitor must derive port 13400 via parse_ip/parse_transport
+            payload: &frame[..40 + diag.len()],
         };
-        let alert = mon.inspect_packet(&pkt_diag, 101);
-        assert!(alert.is_some());
+        let alert = mon.inspect_packet(&pkt, 100);
+        assert!(
+            alert.is_some(),
+            "DoIP diagnostic with no prior activation must be flagged"
+        );
         assert_eq!(alert.unwrap().id, ALERT_ID_DOIP_UNAUTH);
+    }
+
+    /// Regression (H1): a plain large IPv4/TCP packet whose IP-header
+    /// bytes 4..8 encode a value larger than `someip_max_length` must
+    /// NOT raise a spurious `SOMEIP_OVERSIZE` alert. Before the fix,
+    /// `check_someip` parsed the raw IP payload as a SOME/IP header.
+    #[test]
+    fn regression_raw_ipv4_not_misparsed_as_someip() {
+        let config = EthMonitorConfig {
+            someip_max_length: 64,
+            ..EthMonitorConfig::default()
+        };
+        let mut mon = EthMonitor::new(&config, DEFAULT_SIPHASH_KEYS).unwrap();
+        // IPv4 + TCP frame to a non-SOME/IP port. IP-header bytes 2..4
+        // (total length) are large; bytes 4..6 (identification) are set
+        // so a SOME/IP misparse of bytes 4..8 would look oversize.
+        let mut frame = make_doip_over_ipv4_tcp(&[0u8; 16], 8080);
+        frame[4] = 0xFF;
+        frame[5] = 0xFF; // identification — would be SOME/IP length high bytes
+        let pkt = EthPacket {
+            src_mac: MAC_A,
+            dst_mac: MAC_B,
+            vlan_id: None,
+            ethertype: ETHERTYPE_IPV4,
+            dst_port: None,
+            payload: &frame,
+        };
+        assert!(
+            mon.inspect_packet(&pkt, 100).is_none(),
+            "raw IPv4 packet on a non-SOME/IP port must not raise a SOME/IP alert"
+        );
     }
 }
