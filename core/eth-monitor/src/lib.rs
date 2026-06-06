@@ -1224,18 +1224,23 @@ impl EthMonitor {
     ///     detect unauthorized offers and flood.
     ///
     /// SOME/IP runs on top of IP/UDP (well-known port `30490`). This
-    /// helper accepts the packet for parsing when either the EtherType
-    /// indicates IPv4/IPv6 (the caller has already stripped the transport
-    /// header into `payload`) or `dst_port` explicitly matches the
-    /// SOME/IP UDP port. Non-SOME/IP payloads fail the 16-byte header
-    /// parse and are ignored.
+    /// helper requires `dst_port` to explicitly match the SOME/IP UDP
+    /// port and treats `pkt.payload` as the already-stripped SOME/IP
+    /// message (the L3/L4 headers removed). `inspect_packet` derives
+    /// both fields via the L3/L4 parsers before dispatching here.
+    ///
+    /// SECURITY: this checker must never be invoked on a raw IP payload
+    /// (IP header still present). Doing so reinterprets IP-header bytes
+    /// 4..8 as the SOME/IP `length` field, producing spurious
+    /// `ALERT_ID_SOMEIP_OVERSIZE` false positives. The `dst_port` gate
+    /// fails closed: a packet without a confirmed SOME/IP port is
+    /// ignored rather than mis-parsed.
     fn check_someip(&mut self, pkt: &EthPacket<'_>, ts_us: u64) -> Option<SecurityAlert> {
-        // Only parse SOME/IP on IP ethertypes (IPv4/IPv6) or when dst_port
-        // explicitly indicates SOME/IP. Parsing arbitrary non-IP payloads
-        // as SOME/IP produces false positives.
-        let is_ip = pkt.ethertype == ETHERTYPE_IPV4 || pkt.ethertype == ETHERTYPE_IPV6;
-        let is_someip_port = pkt.dst_port == Some(SOMEIP_UDP_PORT);
-        if !is_ip && !is_someip_port {
+        // Fail closed: only parse SOME/IP when the transport destination
+        // port is confirmed to be the SOME/IP UDP port. The EtherType
+        // alone is insufficient — it does not imply the payload has been
+        // stripped down to the SOME/IP message.
+        if pkt.dst_port != Some(SOMEIP_UDP_PORT) {
             return None;
         }
         let hdr = parse_someip_header(pkt.payload)?;
@@ -2370,7 +2375,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 800);
@@ -2395,7 +2400,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt, 900).is_none());
@@ -2412,7 +2417,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt, 1000).is_none());
@@ -2436,7 +2441,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 1100);
@@ -2458,7 +2463,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt, 1200).is_none());
@@ -2478,7 +2483,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt, 1300).is_none());
@@ -3066,7 +3071,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt_ok, 100).is_none());
@@ -3077,7 +3082,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt_bad, 101);
@@ -3146,7 +3151,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt, 100).is_none());
@@ -3167,7 +3172,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt, 100).is_none());
@@ -3188,7 +3193,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 100);
@@ -3386,7 +3391,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 100).unwrap();
@@ -3407,7 +3412,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 100).unwrap();
@@ -3627,7 +3632,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         let alert = mon.inspect_packet(&pkt, 100);
@@ -3650,7 +3655,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt, 100).is_none());
@@ -3769,7 +3774,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &payload,
         };
         assert!(mon.inspect_packet(&pkt, 100).is_none());
@@ -4430,7 +4435,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &pkt_data,
         };
         let alert = mon.inspect_packet(&pkt, 1000);
@@ -4466,7 +4471,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &pkt_data,
         };
         let alert = mon.inspect_packet(&pkt, 1000);
@@ -4494,7 +4499,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &pkt_data,
         };
 
@@ -4527,7 +4532,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &pkt_data,
         };
         mon.inspect_packet(&pkt, 1000);
@@ -4565,7 +4570,7 @@ mod tests {
                 dst_mac: MAC_B,
                 vlan_id: None,
                 ethertype: 0x0800,
-                dst_port: None,
+                dst_port: Some(SOMEIP_UDP_PORT),
                 payload: &pkt_data,
             };
             mon.inspect_packet(&pkt, 1000);
@@ -4587,7 +4592,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &pkt_data,
         };
         mon.inspect_packet(&pkt, 2000);
@@ -4647,7 +4652,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &pkt_data,
         };
         mon.inspect_packet(&pkt, 1000);
@@ -4668,7 +4673,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &pkt_data,
         };
         mon.inspect_packet(&pkt, 2000);
@@ -4698,7 +4703,7 @@ mod tests {
             dst_mac: MAC_B,
             vlan_id: None,
             ethertype: 0x0800,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &pkt_data,
         };
 
@@ -4767,7 +4772,7 @@ mod tests {
             dst_mac: [0xFF; 6],
             vlan_id: None,
             ethertype: super::ETHERTYPE_IPV4,
-            dst_port: None,
+            dst_port: Some(SOMEIP_UDP_PORT),
             payload: &[0u8; 16],
         };
 
