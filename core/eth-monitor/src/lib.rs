@@ -5,11 +5,11 @@
 
 //! Automotive Ethernet intrusion detection monitor.
 //!
-//! # Public API (v1.0 stable)
+//! # Public API (0.7.x)
 //!
 //! The `EthMonitor` type, its allow-list / rate-limit configuration
-//! methods, and the `EthPacket` type form the v1.0 stable
-//! surface and are governed by `DEPRECATION.md`.
+//! methods, and the `EthPacket` type form the `0.7.x` public API
+//! surface and are governed by the workspace `DEPRECATION.md`.
 
 use vs_types::{
     AlertSeverity, IpAddr, IpHeader, IpProtocol, SecurityAlert, TransportHeader, VsError,
