@@ -63,6 +63,19 @@ use vs_types::{AlertSeverity, SecurityAlert, VsError};
 /// Maximum number of recent alerts kept for correlation.
 const CORRELATION_WINDOW: usize = 32;
 
+/// Number of buckets in the dedup hash table.
+///
+/// Open-addressed (linear-probing) table used by [`IdsEngine::record_alert`]
+/// to find an existing ring entry with the same `(id, source_type,
+/// source_id)` identity in O(1) average time. Sized to twice
+/// [`CORRELATION_WINDOW`] (a power of two) so the load factor never exceeds
+/// 0.5, keeping probe chains short. Must be a power of two so the modulo can
+/// be a bit-mask.
+const DEDUP_BUCKETS: usize = CORRELATION_WINDOW * 2;
+
+/// Bit-mask form of `DEDUP_BUCKETS - 1`, used to wrap bucket indices.
+const DEDUP_MASK: usize = DEDUP_BUCKETS - 1;
+
 /// Maximum number of escalation steps allowed in a single correlation pass.
 const MAX_ESCALATION_STEPS: usize = 3;
 
@@ -123,6 +136,133 @@ struct RecentAlert {
     /// Number of times a duplicate alert was recorded in this slot.
     /// Used to detect sustained attacks and escalate severity.
     duplicate_count: u32,
+}
+
+/// Compute the dedup key for an alert's full source identity.
+///
+/// Mixes `id`, `source_type`, and `source_id` so that alerts differing in
+/// any of those fields hash to (mostly) distinct buckets. A duplicate is
+/// only a true match when all three fields are equal — the hash is just an
+/// index; equality is always re-verified against the ring entry.
+#[inline]
+fn dedup_key(alert: &SecurityAlert) -> u64 {
+    // Fibonacci-hash style mix of the three identity fields. The raw
+    // `id ^ source_type ^ source_id` collides trivially (e.g. id=1 vs
+    // id=3,source_id=2), so each field is spread across the word first.
+    let id = alert.id;
+    let st = alert.source_type as u64;
+    let sid = alert.source_id as u64;
+    let mut h = id.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    h ^= st.wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+    h ^= sid.wrapping_mul(0x1656_67B1_9E37_79F9);
+    h
+}
+
+/// Open-addressed (linear-probing) hash table mapping an alert identity to
+/// the ring-buffer slot that currently holds it.
+///
+/// Replaces the former O([`CORRELATION_WINDOW`]) linear dedup scan in
+/// [`IdsEngine::record_alert`] with O(1)-average lookup on the worst-case
+/// latency path (an ECU under sustained attack). Deletion uses backward-shift
+/// (Robin Hood style) compaction so no tombstones accumulate; with a load
+/// factor capped at 0.5 (`DEDUP_BUCKETS == 2 * CORRELATION_WINDOW`) probe
+/// chains stay short.
+///
+/// Each bucket stores `Some((key, slot))` or `None`. The `slot` is an index
+/// into `recent_alerts`; equality is always re-verified by the caller
+/// against the actual ring entry, so a hash collision never causes a false
+/// dedup match.
+#[derive(Clone, Copy)]
+struct DedupTable {
+    buckets: [Option<(u64, usize)>; DEDUP_BUCKETS],
+}
+
+impl DedupTable {
+    const fn new() -> Self {
+        Self {
+            buckets: [None; DEDUP_BUCKETS],
+        }
+    }
+
+    /// Find the ring slot for an alert with the given identity, if present.
+    ///
+    /// `eq` re-verifies full identity equality against the ring entry so a
+    /// hash collision cannot return the wrong slot.
+    fn find(&self, key: u64, mut eq: impl FnMut(usize) -> bool) -> Option<usize> {
+        let mut idx = (key as usize) & DEDUP_MASK;
+        // Probe at most the whole table; load factor <= 0.5 guarantees an
+        // empty bucket terminates the chain long before this bound.
+        for _ in 0..DEDUP_BUCKETS {
+            match self.buckets[idx] {
+                None => return None,
+                Some((k, slot)) => {
+                    if k == key && eq(slot) {
+                        return Some(slot);
+                    }
+                }
+            }
+            idx = (idx + 1) & DEDUP_MASK;
+        }
+        None
+    }
+
+    /// Insert a `(key, slot)` mapping. The caller guarantees no live entry
+    /// for this exact identity already exists (dedup is checked first).
+    fn insert(&mut self, key: u64, slot: usize) {
+        let mut idx = (key as usize) & DEDUP_MASK;
+        for _ in 0..DEDUP_BUCKETS {
+            if self.buckets[idx].is_none() {
+                self.buckets[idx] = Some((key, slot));
+                return;
+            }
+            idx = (idx + 1) & DEDUP_MASK;
+        }
+        // Unreachable: load factor is capped at 0.5, so a free bucket
+        // always exists. Fail closed by doing nothing rather than panicking
+        // — a missed dedup insert only costs a redundant ring entry.
+    }
+
+    /// Remove the bucket that maps `key` to `slot`, then backward-shift any
+    /// following entries in the same probe chain so no tombstone is left.
+    fn remove(&mut self, key: u64, slot: usize) {
+        // Locate the exact bucket holding (key, slot).
+        let mut idx = (key as usize) & DEDUP_MASK;
+        let mut found = None;
+        for _ in 0..DEDUP_BUCKETS {
+            match self.buckets[idx] {
+                None => break,
+                Some((k, s)) => {
+                    if k == key && s == slot {
+                        found = Some(idx);
+                        break;
+                    }
+                }
+            }
+            idx = (idx + 1) & DEDUP_MASK;
+        }
+        let Some(mut hole) = found else {
+            return;
+        };
+        self.buckets[hole] = None;
+        // Backward-shift compaction: pull forward any subsequent entry whose
+        // ideal bucket is at or before `hole` (cyclically), so probe chains
+        // for unrelated keys are not broken by the gap.
+        let mut next = (hole + 1) & DEDUP_MASK;
+        while let Some((k, s)) = self.buckets[next] {
+            let ideal = (k as usize) & DEDUP_MASK;
+            // True iff `ideal` lies cyclically within `[next, hole]` going
+            // backwards — i.e. moving the entry to `hole` does not place it
+            // before its ideal bucket.
+            let movable = (next.wrapping_sub(ideal) & DEDUP_MASK)
+                >= (next.wrapping_sub(hole) & DEDUP_MASK);
+            if movable {
+                self.buckets[hole] = Some((k, s));
+                self.buckets[next] = None;
+                hole = next;
+            }
+            next = (next + 1) & DEDUP_MASK;
+        }
+    }
 }
 
 impl Default for RecentAlert {
@@ -207,6 +347,13 @@ pub struct IdsEngine {
     /// valid entry, causing that entry to be silently overwritten. Useful
     /// for post-incident forensics to detect alert-firehose conditions.
     dropped_alerts: u32,
+    /// Open-addressed hash table mapping each live alert identity
+    /// (`id`/`source_type`/`source_id`) to its `recent_alerts` slot, giving
+    /// `record_alert` O(1)-average dedup instead of a full ring scan. Kept
+    /// in lock-step with `recent_alerts`: an entry is inserted on fresh
+    /// record, removed on expiry in `tick` and on overwrite in
+    /// `record_alert`.
+    dedup: DedupTable,
 }
 
 impl IdsEngine {
@@ -242,6 +389,7 @@ impl IdsEngine {
             can_present_bitmap: 0,
             eth_present_bitmap: 0,
             dropped_alerts: 0,
+            dedup: DedupTable::new(),
         }
     }
 
@@ -432,6 +580,10 @@ impl IdsEngine {
                 continue;
             }
             if ts_us.saturating_sub(entry.alert.timestamp_us) > self.correlation_window_us {
+                // Drop the dedup-table mapping before clearing `valid` so
+                // the table never points at a stale slot.
+                let key = dedup_key(&self.recent_alerts[idx].alert);
+                self.dedup.remove(key, idx);
                 self.recent_alerts[idx].valid = false;
                 // Maintain the invariant: a previously-valid slot just
                 // went invalid. Drop the bus-present bit for that slot.
@@ -641,12 +793,14 @@ impl IdsEngine {
     /// internal ring buffer held an escalated severity but the caller
     /// continued to use the original, unescalated alert.
     fn record_alert(&mut self, mut alert: SecurityAlert) -> SecurityAlert {
-        // Fast path: when no valid entries are present, skip the dedup scan
-        // entirely and insert directly. This trims the 32-slot linear scan
-        // off the hot path on quiet ECUs.
+        let key = dedup_key(&alert);
+
+        // Fast path: when no valid entries are present, skip the dedup
+        // lookup entirely and insert directly.
         if self.valid_count == 0 {
             // The overwritten slot is by definition invalid (valid_count == 0),
-            // so no need to check/decrement or clear bitmaps.
+            // so no need to check/decrement or clear bitmaps. The dedup
+            // table is likewise empty, so no removal is needed.
             let head = self.recent_head;
             self.recent_alerts[head] = RecentAlert {
                 alert,
@@ -654,43 +808,44 @@ impl IdsEngine {
                 duplicate_count: 0,
             };
             self.set_present_bit_for(head, &alert);
+            self.dedup.insert(key, head);
             self.recent_head = (head + 1) % CORRELATION_WINDOW;
             self.valid_count = self.valid_count.saturating_add(1);
             return alert;
         }
 
-        // TODO(perf): replace this O(32) linear dedup scan with an
-        // open-addressed hash keyed on `(id ^ source_type ^ source_id)`
-        // to make dedup O(1) average. Deferred because the bookkeeping
-        // (slot invalidation on expiry/overwrite) is non-trivial and
-        // would expand this PR significantly.
-        //
-        // Check for existing entry with same alert id + full source identity
-        // (source_type + source_id) to deduplicate.  Including source_id
-        // ensures that alerts from different source instances (e.g. two
-        // distinct CAN buses) are tracked independently.
-        for entry in &mut self.recent_alerts {
-            if entry.valid
-                && entry.alert.id == alert.id
-                && entry.alert.source_type == alert.source_type
-                && entry.alert.source_id == alert.source_id
+        // O(1)-average dedup lookup via the open-addressed hash table.
+        // The closure re-verifies full source identity (`id` +
+        // `source_type` + `source_id`) against the candidate ring entry so
+        // a hash collision can never cause a false dedup match. Including
+        // `source_id` ensures alerts from different source instances (e.g.
+        // two distinct CAN buses) are tracked independently.
+        let dup_slot = self.dedup.find(key, |slot| {
+            let e = &self.recent_alerts[slot];
+            e.valid
+                && e.alert.id == alert.id
+                && e.alert.source_type == alert.source_type
+                && e.alert.source_id == alert.source_id
+        });
+        if let Some(slot) = dup_slot {
+            let entry = &mut self.recent_alerts[slot];
+            entry.duplicate_count = entry.duplicate_count.saturating_add(1);
+            // Escalate severity if duplicates accumulate.
+            if entry.duplicate_count >= self.escalation_threshold
+                && alert.severity < AlertSeverity::Critical
             {
-                entry.duplicate_count = entry.duplicate_count.saturating_add(1);
-                // Escalate severity if duplicates accumulate.
-                if entry.duplicate_count >= self.escalation_threshold
-                    && alert.severity < AlertSeverity::Critical
-                {
-                    entry.alert.severity = AlertSeverity::Critical;
-                    // Propagate escalation to the returned alert so that
-                    // dispatch and policy layers act on the correct severity.
-                    alert.severity = AlertSeverity::Critical;
-                }
-                entry.alert.timestamp_us = alert.timestamp_us;
-                // Dedup-refresh: slot was already valid, counter unchanged.
-                // Source bus didn't change, so bitmaps are already correct.
-                return alert;
+                entry.alert.severity = AlertSeverity::Critical;
+                // Propagate escalation to the returned alert so that
+                // dispatch and policy layers act on the correct severity.
+                alert.severity = AlertSeverity::Critical;
             }
+            entry.alert.timestamp_us = alert.timestamp_us;
+            // Dedup-refresh: slot was already valid, counter unchanged.
+            // Source identity didn't change, so bitmaps and the dedup
+            // table mapping are already correct.
+            return alert;
         }
+
         // Inserting into the next ring slot. If it currently holds a valid
         // entry (ring wrapped before any expiry), the overwrite silently
         // drops that entry — record this in `dropped_alerts` for forensic
@@ -699,6 +854,10 @@ impl IdsEngine {
         let overwriting_valid = self.recent_alerts[head].valid;
         if overwriting_valid {
             self.dropped_alerts = self.dropped_alerts.saturating_add(1);
+            // Drop the overwritten entry's dedup mapping before its slot is
+            // reused, otherwise the table would point at the wrong alert.
+            let old_key = dedup_key(&self.recent_alerts[head].alert);
+            self.dedup.remove(old_key, head);
         }
         // Clear any stale bus-present bits at this slot (the previous
         // alert may have been on a different bus).
@@ -709,6 +868,7 @@ impl IdsEngine {
             duplicate_count: 0,
         };
         self.set_present_bit_for(head, &alert);
+        self.dedup.insert(key, head);
         self.recent_head = (head + 1) % CORRELATION_WINDOW;
         if !overwriting_valid {
             self.valid_count = self.valid_count.saturating_add(1);
@@ -2301,5 +2461,166 @@ mod tests {
             !found_b,
             "stale entry must be expired even when sitting after a refreshed slot"
         );
+    }
+
+    // ----- H1: open-addressed dedup hash table -----
+
+    /// Dedup via the hash table must still collapse repeated identities into
+    /// a single ring entry and accumulate the duplicate count.
+    #[test]
+    fn dedup_hash_table_collapses_repeats() {
+        let mut engine = make_engine();
+        let alert = SecurityAlert {
+            id: 7,
+            severity: AlertSeverity::Low,
+            source_type: vs_types::SOURCE_CAN,
+            source_id: 3,
+            payload_hash: PayloadHash::ZERO,
+            timestamp_us: 1,
+        };
+        for ts in 1..=20 {
+            engine.record_alert(SecurityAlert {
+                timestamp_us: ts,
+                ..alert
+            });
+        }
+        let valid: usize = engine.recent_alerts.iter().filter(|e| e.valid).count();
+        assert_eq!(valid, 1, "all repeats must dedup into one ring slot");
+        let dup = engine
+            .recent_alerts
+            .iter()
+            .find(|e| e.valid)
+            .unwrap()
+            .duplicate_count;
+        assert_eq!(dup, 19, "19 dedup hits after the initial insert");
+    }
+
+    /// Wrapping the ring with `CORRELATION_WINDOW + N` distinct identities
+    /// must keep the dedup table consistent: every still-live identity must
+    /// be found exactly once, and overwritten identities must be evicted
+    /// from the table so they no longer dedup-match.
+    #[test]
+    fn dedup_table_consistent_after_ring_wrap() {
+        let mut engine = make_engine();
+        let total = CORRELATION_WINDOW + 10;
+        for i in 0..total as u64 {
+            engine.record_alert(SecurityAlert {
+                id: i,
+                severity: AlertSeverity::Low,
+                source_type: vs_types::SOURCE_CAN,
+                source_id: 0,
+                payload_hash: PayloadHash::ZERO,
+                timestamp_us: i,
+            });
+        }
+        // Ring holds exactly CORRELATION_WINDOW slots; the 10 earliest
+        // identities were overwritten and counted as dropped.
+        assert_eq!(engine.dropped_alert_count(), 10);
+        let valid: usize = engine.recent_alerts.iter().filter(|e| e.valid).count();
+        assert_eq!(valid, CORRELATION_WINDOW);
+
+        // Re-recording an overwritten identity (id 0) must NOT dedup-match
+        // a stale table entry — it inserts fresh with duplicate_count 0.
+        engine.record_alert(SecurityAlert {
+            id: 0,
+            severity: AlertSeverity::Low,
+            source_type: vs_types::SOURCE_CAN,
+            source_id: 0,
+            payload_hash: PayloadHash::ZERO,
+            timestamp_us: 9999,
+        });
+        let mut evicted_count = 0usize;
+        let mut evicted_dup = 0u32;
+        for e in &engine.recent_alerts {
+            if e.valid && e.alert.id == 0 {
+                evicted_count += 1;
+                evicted_dup = e.duplicate_count;
+            }
+        }
+        assert_eq!(
+            evicted_count, 1,
+            "re-recorded evicted identity must produce exactly one fresh slot"
+        );
+        assert_eq!(
+            evicted_dup, 0,
+            "evicted identity must not carry a stale duplicate_count"
+        );
+
+        // A still-live identity (the last one recorded before the reinsert)
+        // must still dedup-match in O(1).
+        let live_id = (total - 1) as u64;
+        engine.record_alert(SecurityAlert {
+            id: live_id,
+            severity: AlertSeverity::Low,
+            source_type: vs_types::SOURCE_CAN,
+            source_id: 0,
+            payload_hash: PayloadHash::ZERO,
+            timestamp_us: 10_000,
+        });
+        let live_dup = engine
+            .recent_alerts
+            .iter()
+            .find(|e| e.valid && e.alert.id == live_id)
+            .unwrap()
+            .duplicate_count;
+        assert_eq!(live_dup, 1, "live identity must still dedup-match");
+    }
+
+    /// After `tick` expires entries, their dedup-table mappings must be
+    /// dropped so a later identical alert inserts fresh rather than
+    /// dedup-matching an expired slot.
+    #[test]
+    fn dedup_table_drops_expired_entries_on_tick() {
+        let mut engine = make_engine();
+        let alert = SecurityAlert {
+            id: 55,
+            severity: AlertSeverity::Low,
+            source_type: vs_types::SOURCE_CAN,
+            source_id: 9,
+            payload_hash: PayloadHash::ZERO,
+            timestamp_us: 100,
+        };
+        engine.record_alert(alert);
+        // Window is 100_000; tick well past it expires the entry.
+        engine.tick(1_000_000);
+        assert_eq!(engine.recent_alerts.iter().filter(|e| e.valid).count(), 0);
+
+        // Same identity again: must insert fresh (duplicate_count 0), not
+        // dedup-match the expired slot.
+        engine.record_alert(SecurityAlert {
+            timestamp_us: 1_000_001,
+            ..alert
+        });
+        let entry = engine
+            .recent_alerts
+            .iter()
+            .find(|e| e.valid && e.alert.id == 55)
+            .unwrap();
+        assert_eq!(
+            entry.duplicate_count, 0,
+            "expired identity must not dedup-match after tick"
+        );
+    }
+
+    /// Hash collisions on the dedup key must not cause false dedup matches:
+    /// two alerts with distinct full identities are kept as separate ring
+    /// entries even if their keys were to collide.
+    #[test]
+    fn dedup_distinct_identities_never_collapse() {
+        let mut engine = make_engine();
+        // Many distinct (id, source_id) pairs; the table re-verifies full
+        // identity, so each must occupy its own slot.
+        for i in 0..16u64 {
+            engine.record_alert(SecurityAlert {
+                id: i,
+                severity: AlertSeverity::Low,
+                source_type: vs_types::SOURCE_CAN,
+                source_id: (i as u32) * 7 + 1,
+                payload_hash: PayloadHash::ZERO,
+                timestamp_us: i,
+            });
+        }
+        let valid = engine.recent_alerts.iter().filter(|e| e.valid).count();
+        assert_eq!(valid, 16, "distinct identities must not be deduplicated");
     }
 }
