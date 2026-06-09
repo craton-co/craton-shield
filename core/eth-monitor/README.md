@@ -18,28 +18,32 @@ flooding, raising `SecurityAlert` events for each detected threat.
 
 ## Usage
 
+`inspect_packet` either takes a raw IP frame (leave `dst_port` as `None`
+and the monitor strips the L3/L4 headers itself via `parse_ip` /
+`parse_transport`), or an already-stripped L4 payload paired with an
+explicit `dst_port`. SOME/IP and DoIP checks only run once the transport
+port is positively identified — an unidentified packet is never
+re-interpreted as a protocol header.
+
 ```rust,no_run
-use vs_eth_monitor::{EthMonitor, EthMonitorConfig, EthPacket};
+use vs_eth_monitor::{EthMonitor, EthMonitorConfig, EthPacket, DEFAULT_SIPHASH_KEYS};
 
 let config = EthMonitorConfig::default();
-// Example keys only — production deployments MUST source these from the
-// platform TRNG. The runtime wires this up automatically via
-// `CratonShield::init`.
-let siphash_keys: [(u64, u64); 4] = [
-    (0xCAFE_BABE_DEAD_BEEF, 0xFEED_FACE_C0DE_F00D),
-    (0x0123_4567_89AB_CDEF, 0xFEDC_BA98_7654_3210),
-    (0xA5A5_A5A5_5A5A_5A5A, 0x5A5A_5A5A_A5A5_A5A5),
-    (0xDEAD_C0DE_BAAD_F00D, 0xBADD_CAFE_BAAD_BEEF),
-];
-let mut monitor = EthMonitor::new(&config, siphash_keys).unwrap();
+// `DEFAULT_SIPHASH_KEYS` is for examples/tests ONLY. Production
+// deployments MUST source these from the platform TRNG; the runtime
+// wires this up automatically via `CratonShield::init`.
+let mut monitor = EthMonitor::new(&config, DEFAULT_SIPHASH_KEYS).unwrap();
 
+// An already-stripped SOME/IP message: pair the L4 payload with the
+// SOME/IP UDP port (30490) so the monitor dispatches it correctly.
+let someip_payload: [u8; 16] = [0u8; 16];
 let packet = EthPacket {
     src_mac: [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
     dst_mac: [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF],
     vlan_id: None,
     ethertype: 0x0800,
-    dst_port: None,
-    payload: &[],
+    dst_port: Some(30490),
+    payload: &someip_payload,
 };
 let alert = monitor.inspect_packet(&packet, /* ts_us = */ 0);
 let _ = alert;
