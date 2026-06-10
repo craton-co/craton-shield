@@ -611,6 +611,26 @@ impl IdsEngine {
     ///
     /// Returns the alert (after correlation/escalation) and dispatches it to
     /// all registered dispatchers. Returns `None` if no alert was generated.
+    ///
+    /// # Escalation precedence
+    ///
+    /// Two independent escalation mechanisms run, in this fixed order:
+    ///
+    /// 1. [`Self::maybe_escalate`] — *cross-bus correlation*: raises severity
+    ///    one step per distinct opposite-bus alert in the correlation window
+    ///    (capped at [`MAX_ESCALATION_STEPS`]). It runs on the *pre-recorded*
+    ///    alert and cannot see the alert about to be recorded.
+    /// 2. [`Self::record_alert`] — *duplicate-count escalation*: when this
+    ///    exact alert identity has been seen `escalation_threshold` times,
+    ///    severity jumps straight to `Critical`.
+    ///
+    /// The two compose by *sequencing*, not by addition: `record_alert`
+    /// receives whatever severity `maybe_escalate` produced and may raise it
+    /// further to `Critical`. Both mechanisms are monotonic and saturate at
+    /// `Critical`, so the final severity is the maximum either would have
+    /// produced. Callers always act on this composed severity because it is
+    /// the value returned here and dispatched. Do not reorder these two
+    /// calls: `record_alert` mutates the ring that `maybe_escalate` reads.
     pub fn submit_can_frame(&mut self, frame: &CanFrame, ts_us: u64) -> Option<SecurityAlert> {
         let original_ts_us = ts_us;
         let (ts_us, clock_alert) = self.clamp_timestamp(ts_us);
@@ -632,6 +652,9 @@ impl IdsEngine {
     ///
     /// Returns the alert (after correlation/escalation) and dispatches it to
     /// all registered dispatchers. Returns `None` if no alert was generated.
+    ///
+    /// See [`Self::submit_can_frame`] for the escalation precedence rules
+    /// shared by both ingestion paths.
     pub fn submit_eth_packet(&mut self, pkt: &EthPacket<'_>, ts_us: u64) -> Option<SecurityAlert> {
         let original_ts_us = ts_us;
         let (ts_us, clock_alert) = self.clamp_timestamp(ts_us);
@@ -792,6 +815,12 @@ impl IdsEngine {
     /// the correct severity, closing the state-confusion gap where the
     /// internal ring buffer held an escalated severity but the caller
     /// continued to use the original, unescalated alert.
+    ///
+    /// This is the *second* escalation stage. The `alert` argument has
+    /// already passed through [`Self::maybe_escalate`]; duplicate-count
+    /// escalation here may raise its severity further (to `Critical`). The
+    /// returned severity is therefore the composition of both stages — see
+    /// [`Self::submit_can_frame`] for the precedence contract.
     fn record_alert(&mut self, mut alert: SecurityAlert) -> SecurityAlert {
         let key = dedup_key(&alert);
 
@@ -909,6 +938,15 @@ impl IdsEngine {
     /// Counts distinct cross-bus matches and escalates once per match,
     /// allowing multi-hop escalation (e.g. Info -> Medium if 2 cross-bus
     /// alerts are found).
+    ///
+    /// This is the *first* of two escalation stages (see
+    /// [`Self::submit_can_frame`] for the full precedence contract). It runs
+    /// before [`Self::record_alert`], so it cannot observe the alert about
+    /// to be recorded; the duplicate-count escalation in `record_alert`
+    /// composes on top of whatever severity this stage returns. Both stages
+    /// saturate at `Critical`, so the order is observationally irrelevant —
+    /// but `maybe_escalate` must stay first because `record_alert` mutates
+    /// the ring this function reads.
     ///
     /// Scans every slot in the ring buffer.  We cannot short-circuit on
     /// "consecutive expired slots" because `record_alert` refreshes the
