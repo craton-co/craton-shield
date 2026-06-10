@@ -33,4 +33,4 @@ let mut ids = IdsEngine::new(can, eth, 100_000); // 100ms correlation window
 
 ## License
 
-Apache-2.0. See [LICENSE](../../LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
