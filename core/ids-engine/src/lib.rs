@@ -45,13 +45,15 @@
 //! // and applies policy-based response actions automatically.
 //! ```
 //!
-//! ## Public API (v1.0 stable)
+//! ## Public API (0.7.x)
 //!
-//! The `IdsEngine` orchestrator and its `submit_can_frame` /
+//! The crate is at version `0.7.x` — pre-1.0, so the public surface is not
+//! yet frozen. The `IdsEngine` orchestrator and its `submit_can_frame` /
 //! `submit_eth_packet` ingestion methods (which return any
 //! correlation-escalated [`SecurityAlert`] directly and dispatch it
-//! synchronously to registered dispatchers) form the v1.0 stable surface
-//! and are governed by `DEPRECATION.md`.
+//! synchronously to registered dispatchers) are the intended long-term
+//! stable surface; any breaking change to them before 1.0 is governed by
+//! the deprecation policy in the workspace-root `DEPRECATION.md`.
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
