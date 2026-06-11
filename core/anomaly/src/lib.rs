@@ -95,6 +95,46 @@ impl EwmaDetector {
         })
     }
 
+    /// Relative variance floor.
+    ///
+    /// On a perfectly stationary stream `diff == 0`, so *any* EWMA-variance
+    /// recursion decays the variance estimate geometrically toward `0`. Once
+    /// it reaches exactly `0`, [`Self::update`] takes the zero-variance branch
+    /// and flags every later sample whose deviation exceeds `f32::EPSILON`
+    /// with `z_score == f32::MAX` — a false-positive storm on long-lived
+    /// automotive signals that carry tiny legitimate jitter (H2).
+    ///
+    /// To fail closed, the variance used for z-scoring is floored at
+    /// `(EWMA_VARIANCE_FLOOR_REL * mean)^2` (relative to the signal
+    /// magnitude), with an absolute lower bound of
+    /// [`Self::EWMA_VARIANCE_FLOOR_ABS`] so the floor is still positive when
+    /// `mean == 0`. The floor only ever *raises* the variance, so it cannot
+    /// mask a genuine anomaly; it merely prevents the std-dev from collapsing
+    /// to zero and turning sub-epsilon jitter into infinite z-scores.
+    const EWMA_VARIANCE_FLOOR_REL: f32 = 1.0e-6;
+
+    /// Absolute lower bound for the variance floor (see
+    /// [`Self::EWMA_VARIANCE_FLOOR_REL`]). Used when the running mean is zero
+    /// or tiny so the floored variance is always strictly positive.
+    const EWMA_VARIANCE_FLOOR_ABS: f32 = f32::MIN_POSITIVE;
+
+    /// Variance estimate floored away from zero — see
+    /// [`Self::EWMA_VARIANCE_FLOOR_REL`]. Always finite and strictly
+    /// positive.
+    fn floored_variance(&self) -> f32 {
+        let mean_abs = if self.mean < 0.0 { -self.mean } else { self.mean };
+        let rel = Self::EWMA_VARIANCE_FLOOR_REL * mean_abs;
+        let mut floor = rel * rel;
+        if !floor.is_finite() || floor < Self::EWMA_VARIANCE_FLOOR_ABS {
+            floor = Self::EWMA_VARIANCE_FLOOR_ABS;
+        }
+        if self.variance.is_finite() && self.variance > floor {
+            self.variance
+        } else {
+            floor
+        }
+    }
+
     /// Feed a new sample into the detector and return its anomaly score.
     ///
     /// Returns `None` for the very first sample (baseline) or if `value` is
@@ -127,7 +167,12 @@ impl EwmaDetector {
         if self.count < self.warmup_count {
             self.count = self.count.saturating_add(1);
             self.mean += self.alpha * diff;
-            let new_var = (1.0 - self.alpha) * (self.variance + self.alpha * (diff * diff));
+            // Standard incremental EWMA variance recursion (H2):
+            //   var <- (1 - α)·var + α·diff²
+            // The previous form `(1-α)·(var + α·diff²)` was non-standard and,
+            // combined with the zero-variance branch below, produced a
+            // false-positive storm once variance decayed to exactly 0.
+            let new_var = (1.0 - self.alpha) * self.variance + self.alpha * (diff * diff);
             // Preserve prior variance on overflow rather than zeroing it,
             // which would silently disable downstream detection on the next
             // sample. See defect #2.
@@ -142,29 +187,34 @@ impl EwmaDetector {
             });
         }
 
-        // `f32::EPSILON` is the spacing near 1.0, not a positive-value floor;
-        // legitimate variances like 1e-10 must take the positive-variance
-        // branch. See defect #1.
-        let score = if self.variance.is_finite() && self.variance > 0.0 {
-            let std_dev = sqrt_approx(self.variance);
-            if std_dev > f32::EPSILON {
-                let z_abs = diff_abs / std_dev;
+        // Score against a variance floored away from zero (H2). On a
+        // stationary signal the EWMA variance decays geometrically toward 0;
+        // `floored_variance` keeps it strictly positive so the std-dev never
+        // collapses and tiny legitimate jitter is no longer turned into an
+        // `f32::MAX` z-score. The floor only raises variance, so a genuine
+        // anomaly still scores correctly.
+        let effective_var = self.floored_variance();
+        let std_dev = sqrt_approx(effective_var);
+        let score = if std_dev > f32::MIN_POSITIVE {
+            let z_abs = diff_abs / std_dev;
+            // Guard against a non-finite z-score (e.g. std_dev subnormal and
+            // diff large): treat it as a threshold breach but with a finite
+            // reported score so downstream consumers are not poisoned.
+            if z_abs.is_finite() {
                 AnomalyScore {
                     z_score: z_abs,
                     is_anomalous: z_abs > self.z_threshold,
                 }
             } else {
-                // Variance is positive but std_dev rounds to zero — any
-                // measurable deviation is anomalous.
-                let is_anom = diff_abs > f32::EPSILON;
                 AnomalyScore {
-                    z_score: if is_anom { f32::MAX } else { 0.0 },
-                    is_anomalous: is_anom,
+                    z_score: f32::MAX,
+                    is_anomalous: true,
                 }
             }
         } else {
-            // Zero variance (stationary signal). Any non-trivial deviation
-            // from the mean is infinitely many standard deviations away.
+            // Should be unreachable now that `floored_variance` guarantees a
+            // strictly-positive variance, but kept as a defensive fallback:
+            // any measurable deviation is anomalous.
             let is_anom = diff_abs > f32::EPSILON;
             AnomalyScore {
                 z_score: if is_anom { f32::MAX } else { 0.0 },
@@ -191,7 +241,9 @@ impl EwmaDetector {
             // here, but defensive) must not poison the running statistics.
             self.count = self.count.saturating_add(1);
             self.mean += self.alpha * diff;
-            let new_var = (1.0 - self.alpha) * (self.variance + self.alpha * (diff * diff));
+            // Standard incremental EWMA variance recursion (H2):
+            //   var <- (1 - α)·var + α·diff²
+            let new_var = (1.0 - self.alpha) * self.variance + self.alpha * (diff * diff);
             // Preserve prior variance on non-finite/negative drift rather than
             // resetting to 0 — see defect #2.
             self.variance = if new_var.is_finite() && new_var >= 0.0 {
@@ -1196,6 +1248,53 @@ mod tests {
         assert!(
             (det.variance() - var_after_warmup).abs() < f32::EPSILON,
             "anomalous sample must NOT update variance"
+        );
+    }
+
+    // ---- H2: variance-collapse regression ----
+
+    #[test]
+    fn ewma_variance_collapse_no_false_positive_storm() {
+        // H2 regression: feed a long perfectly-constant stream so the EWMA
+        // variance decays geometrically toward zero, then inject a tiny
+        // legitimate jitter just above f32::EPSILON. Historically the
+        // detector would have collapsed into the zero-variance branch and
+        // flagged this with z_score == f32::MAX. With the variance floor the
+        // jitter must NOT be flagged.
+        let mut det = EwmaDetector::new(0.3, 3.0).unwrap();
+        for _ in 0..100_000 {
+            let _ = det.update(50.0);
+        }
+        // A tiny deviation (a few epsilons) on a 50.0 baseline is well within
+        // legitimate sensor jitter and must not trip the detector.
+        let score = det
+            .update(50.0 + f32::EPSILON * 4.0)
+            .expect("post-warm-up score");
+        assert!(
+            score.z_score.is_finite(),
+            "z_score must stay finite, got {}",
+            score.z_score
+        );
+        assert!(
+            !score.is_anomalous,
+            "tiny jitter on a long constant stream must NOT be flagged \
+             (z_score = {})",
+            score.z_score
+        );
+    }
+
+    #[test]
+    fn ewma_genuine_anomaly_still_flagged_after_variance_floor() {
+        // The variance floor must not mask real anomalies: after a long
+        // constant stream a large outlier must still be flagged.
+        let mut det = EwmaDetector::new(0.3, 3.0).unwrap();
+        for _ in 0..10_000 {
+            let _ = det.update(50.0);
+        }
+        let score = det.update(50_000.0).expect("score");
+        assert!(
+            score.is_anomalous,
+            "large outlier must still be flagged after variance floor"
         );
     }
 
