@@ -313,10 +313,21 @@ impl EwmaDetector {
 /// multiple byte values will collide into the same bin (e.g. with `BINS = 16`,
 /// values `0`, `16`, `32`, … `240` all map to bin 0). Use `BINS = 256` for
 /// per-byte-value resolution with no collisions.
+///
+/// To stay fail-closed under collisions, the detector also keeps an exact
+/// 256-bit "seen" bitmap of which raw byte values have actually been
+/// observed. [`Self::is_anomalous`] consults this bitmap so that a never-seen
+/// byte is always flagged as anomalous even if it collides with a frequent
+/// byte in the same bin (see the method docs).
 #[derive(Debug, Clone)]
 pub struct HistogramDetector<const BINS: usize> {
     counts: [u64; BINS],
     total: u64,
+    /// Exact per-byte-value "has this raw value ever been observed" bitmap,
+    /// 256 bits packed into four `u64` words. Independent of `BINS`, so it is
+    /// collision-free even when `BINS < 256`. Used by [`Self::is_anomalous`]
+    /// to avoid bin-collision false negatives (H1).
+    seen: [u64; 4],
     /// Sticky saturation flag: once any per-bin or total counter has hit
     /// `u64::MAX`, this is latched to `true` until [`Self::reset`] clears it.
     saturated: bool,
@@ -329,8 +340,21 @@ impl<const BINS: usize> HistogramDetector<BINS> {
         Self {
             counts: [0u64; BINS],
             total: 0,
+            seen: [0u64; 4],
             saturated: false,
         }
+    }
+
+    /// Mark raw byte `value` as observed in the 256-bit `seen` bitmap.
+    #[inline]
+    fn mark_seen(&mut self, value: u8) {
+        self.seen[(value >> 6) as usize] |= 1u64 << (value & 63);
+    }
+
+    /// Return `true` if raw byte `value` has been observed at least once.
+    #[inline]
+    fn has_seen(&self, value: u8) -> bool {
+        (self.seen[(value >> 6) as usize] >> (value & 63)) & 1 != 0
     }
 
     /// Map a value to a bin index. Uses bit-mask when BINS is a power of two
@@ -347,6 +371,7 @@ impl<const BINS: usize> HistogramDetector<BINS> {
     /// Record one observation of `value`, incrementing both the bin counter
     /// and the running total with saturating arithmetic.
     pub fn observe(&mut self, value: u8) {
+        self.mark_seen(value);
         let idx = Self::bin_index(value);
         let new_count = self.counts[idx].saturating_add(1);
         if new_count == u64::MAX {
@@ -375,8 +400,23 @@ impl<const BINS: usize> HistogramDetector<BINS> {
         self.counts[idx] as f32 / self.total as f32
     }
 
-    /// Return `true` when the empirical probability of `value` falls below
-    /// `threshold`. Returns `false` on an empty or saturated detector.
+    /// Return `true` when `value` looks anomalous against the learned model.
+    ///
+    /// Detection is fail-closed under bin collisions (H1): when `BINS < 256`
+    /// several raw byte values share a bin, so [`Self::probability`] reports
+    /// the *bin* probability, not the value probability. A never-seen byte
+    /// that collides with a frequent byte would therefore score as common.
+    /// To avoid that false negative, this method first consults an exact
+    /// 256-bit `seen` bitmap: a byte value that has *never* been observed is
+    /// always reported anomalous, regardless of its bin's probability.
+    ///
+    /// For values that *have* been seen, the bin-level empirical probability
+    /// is compared against `threshold`. Note that with `BINS < 256` this
+    /// remains a bin-level rarity test — a rare byte sharing a bin with a
+    /// frequent one may not be flagged. Use `BINS == 256` for exact
+    /// per-byte-value rarity detection.
+    ///
+    /// Returns `false` on an empty or saturated detector.
     pub fn is_anomalous(&self, value: u8, threshold: f32) -> bool {
         // Once any counter has reached the u64::MAX sentinel the model is no
         // longer mathematically sound (ratios become meaningless). Return
@@ -384,7 +424,15 @@ impl<const BINS: usize> HistogramDetector<BINS> {
         if self.saturated {
             return false;
         }
-        self.total > 0 && self.probability(value) < threshold
+        if self.total == 0 {
+            return false;
+        }
+        // Fail closed on bin collisions: a byte value never actually observed
+        // is anomalous even if its bin has a high probability (H1).
+        if !self.has_seen(value) {
+            return true;
+        }
+        self.probability(value) < threshold
     }
 
     /// Zero all counters. After calling this, the detector is in the same
@@ -393,6 +441,7 @@ impl<const BINS: usize> HistogramDetector<BINS> {
     pub fn reset(&mut self) {
         self.counts = [0u64; BINS];
         self.total = 0;
+        self.seen = [0u64; 4];
         self.saturated = false;
     }
 
@@ -1084,6 +1133,61 @@ mod tests {
         hist.observe(48);
         assert_eq!(hist.total, 4);
         assert_eq!(hist.counts[0], 4);
+    }
+
+    #[test]
+    fn histogram_bin_collision_never_seen_byte_flagged() {
+        // H1 regression: with BINS=16, byte 0x0F and byte 0xFF both map to
+        // bin 15 ((v) & 15 == 15). Train heavily on 0x0F only. Byte 0xFF was
+        // never observed, but it shares a high-probability bin — the old
+        // is_anomalous would have returned false (false negative). The seen
+        // bitmap must now flag 0xFF as anomalous.
+        let mut hist = HistogramDetector::<16>::new();
+        for _ in 0..1000 {
+            hist.observe(0x0F);
+        }
+        assert_eq!(
+            HistogramDetector::<16>::bin_index(0x0F),
+            HistogramDetector::<16>::bin_index(0xFF),
+            "test precondition: 0x0F and 0xFF must collide in bin 15"
+        );
+        // The frequently-seen byte is not anomalous.
+        assert!(!hist.is_anomalous(0x0F, 0.5));
+        // The never-seen colliding byte MUST be flagged.
+        assert!(
+            hist.is_anomalous(0xFF, 0.5),
+            "never-seen byte 0xFF colliding with frequent 0x0F must be flagged"
+        );
+    }
+
+    #[test]
+    fn histogram_seen_byte_below_threshold_still_flagged() {
+        // A byte that has been seen but is rare (probability below threshold)
+        // is still flagged via the probability path.
+        let mut hist = HistogramDetector::<256>::new();
+        for _ in 0..1000 {
+            hist.observe(0x10);
+        }
+        hist.observe(0x20); // seen once, very rare
+        assert!(hist.is_anomalous(0x20, 0.01), "rare seen byte must flag");
+        assert!(!hist.is_anomalous(0x10, 0.01), "frequent byte must not");
+    }
+
+    #[test]
+    fn histogram_reset_clears_seen_bitmap() {
+        let mut hist = HistogramDetector::<16>::new();
+        for _ in 0..100 {
+            hist.observe(0x0F);
+        }
+        hist.reset();
+        // After reset, total == 0 so is_anomalous returns false even for a
+        // previously-seen byte; the seen bitmap must also be cleared so a
+        // fresh observation does not see stale state.
+        assert!(!hist.is_anomalous(0x0F, 0.5));
+        hist.observe(0xFF);
+        // 0x0F was never observed since the reset -> anomalous.
+        assert!(hist.is_anomalous(0x0F, 0.5));
+        assert!(!hist.is_anomalous(0xFF, 0.5));
     }
 
     #[test]
