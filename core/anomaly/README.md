@@ -29,7 +29,7 @@ if let Some(score) = detector.update(42.0) {
 }
 ```
 
-## 0.7.0 additions
+## Detector lifecycle helpers
 
 - `EwmaDetector::with_options(alpha, z_threshold, freeze_duration, warmup_count)` —
   construct a detector with a custom freeze duration and warm-up sample count.
