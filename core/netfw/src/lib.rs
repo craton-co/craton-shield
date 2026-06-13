@@ -959,10 +959,34 @@ impl ConnEntry {
     }
 }
 
+/// Build the connection-tracking key for a packet.
+///
+/// The transport-layer source and destination ports are recovered by
+/// parsing the IP and transport headers out of the packet payload, so
+/// flows that differ only by source port are tracked as distinct
+/// connections. When the payload is not parseable transport (e.g. ARP,
+/// truncated frames) the port fields fall back to `0`.
+fn conn_key(pkt: &EthPacket<'_>) -> ConnKey {
+    let (src_port, dst_port) = parse_ip(pkt.ethertype, pkt.payload)
+        .and_then(|(ip, offset)| parse_transport(ip.protocol, pkt.payload, offset))
+        .map_or((0, 0), |t| (t.src_port, t.dst_port));
+    ConnKey {
+        src_mac: pkt.src_mac,
+        dst_mac: pkt.dst_mac,
+        ethertype: pkt.ethertype,
+        src_port,
+        dst_port,
+        vlan_id: pkt.vlan_id.unwrap_or(0),
+    }
+}
+
 /// Simplified connection tracker.
 ///
-/// Tracks `(src_mac, dst_mac, ethertype)` tuples inside a fixed-size table.
-/// Entries older than 5 seconds are considered stale.
+/// Tracks `(src_mac, dst_mac, ethertype, src_port, dst_port, vlan_id)`
+/// tuples inside a fixed-size table. The source and destination ports are
+/// parsed from the packet's transport header, so flows differing only by
+/// source port are kept as separate entries. Entries older than 5 seconds
+/// are considered stale.
 pub struct ConnTracker<const MAX: usize> {
     entries: [ConnEntry; MAX],
 }
@@ -985,14 +1009,7 @@ impl<const MAX: usize> ConnTracker<MAX> {
     /// Non-monotonic timestamps: if `ts_us` is earlier than the existing
     /// entry's `last_seen_us`, the entry is *not* rolled back.
     pub fn track(&mut self, pkt: &EthPacket<'_>, ts_us: u64) {
-        let key = ConnKey {
-            src_mac: pkt.src_mac,
-            dst_mac: pkt.dst_mac,
-            ethertype: pkt.ethertype,
-            src_port: 0,
-            dst_port: pkt.dst_port.unwrap_or(0),
-            vlan_id: pkt.vlan_id.unwrap_or(0),
-        };
+        let key = conn_key(pkt);
 
         // Update existing entry if present.
         for entry in &mut self.entries {
@@ -1029,17 +1046,10 @@ impl<const MAX: usize> ConnTracker<MAX> {
     }
 
     /// Returns `true` if there is a non-stale entry for the packet's
-    /// `(src_mac, dst_mac, ethertype)` tuple.
+    /// `(src_mac, dst_mac, ethertype, src_port, dst_port, vlan_id)` tuple.
     #[must_use]
     pub fn is_known(&self, pkt: &EthPacket<'_>, ts_us: u64) -> bool {
-        let key = ConnKey {
-            src_mac: pkt.src_mac,
-            dst_mac: pkt.dst_mac,
-            ethertype: pkt.ethertype,
-            src_port: 0,
-            dst_port: pkt.dst_port.unwrap_or(0),
-            vlan_id: pkt.vlan_id.unwrap_or(0),
-        };
+        let key = conn_key(pkt);
         for entry in &self.entries {
             if entry.active
                 && entry.key == key
