@@ -18,14 +18,40 @@ rules can be added at runtime for adaptive threat response.
 ## Usage
 
 ```rust
-use vs_netfw::{Firewall, FirewallRule, RuleAction};
+use vs_netfw::{Firewall, FirewallRule, RuleAction, Verdict};
+use vs_eth_monitor::EthPacket;
 
-let mut fw = Firewall::new();
-fw.add_rule(FirewallRule {
-    id: 1, priority: 10, action: RuleAction::Allow,
-    dst_port: Some(13400), active: true, ..Default::default()
-})?;
-let verdict = fw.evaluate(&packet, timestamp_us);
+fn main() -> Result<(), vs_types::VsError> {
+    let mut fw = Firewall::new();
+
+    // Allow IPv4 traffic from a specific source MAC. Adding an L3/L4 field
+    // such as `dst_port: Some(13400)` would additionally require the packet
+    // payload to parse as that transport flow.
+    fw.add_rule(FirewallRule {
+        id: 1,
+        priority: 10,
+        action: RuleAction::Allow,
+        src_mac: Some([0x02, 0, 0, 0, 0, 1]),
+        ethertype: Some(0x0800),
+        active: true,
+        ..Default::default()
+    })?;
+
+    // Build a packet to evaluate (normally produced by the eth-monitor crate).
+    let packet = EthPacket {
+        src_mac: [0x02, 0, 0, 0, 0, 1],
+        dst_mac: [0x02, 0, 0, 0, 0, 2],
+        vlan_id: None,
+        ethertype: 0x0800,
+        dst_port: None,
+        payload: &[],
+    };
+
+    let timestamp_us: u64 = 1_000_000;
+    let verdict = fw.evaluate(&packet, timestamp_us);
+    assert_eq!(verdict, Verdict::Allow);
+    Ok(())
+}
 ```
 
 ## Feature Flags
