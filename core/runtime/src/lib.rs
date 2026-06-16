@@ -346,6 +346,43 @@ macro_rules! try_log {
     }};
 }
 
+/// Append a *safety-critical* event to the event log without ever
+/// disabling the platform.
+///
+/// Identical to [`try_log!`] in tracking consecutive failures and
+/// escalating `event_logger` health to `Degraded`/`Failed`, but it
+/// deliberately **never** flips `initialized = false`.  This is used
+/// for the watchdog signal: a watchdog expiry is the single most
+/// safety-critical event, and it is the most likely to coincide with a
+/// degraded logger.  Routing it through the ordinary `try_log!` would
+/// let a failing audit trail silently turn the platform off on exactly
+/// the signal a safe-state action depends on.  The watchdog action is
+/// surfaced regardless of audit-log health.
+macro_rules! try_log_safety_critical {
+    ($self:ident, $event_type:expr, $payload:expr, $ts:expr) => {{
+        match $self
+            .event_logger
+            .append($event_type, $payload, $ts, &$self.crypto)
+        {
+            Ok(_) => {
+                $self.event_log_failures = 0;
+                $self.last_log_failed = false;
+            }
+            Err(_) => {
+                $self.event_log_failures = $self.event_log_failures.saturating_add(1);
+                $self.last_log_failed = true;
+                if $self.event_log_failures >= MAX_LOG_FAILURES_BEFORE_FAILED {
+                    // Escalate health for visibility, but do NOT disable
+                    // the platform: the safe-state action must still be
+                    // delivered to the caller.
+                    $self.health.event_logger = SubsystemStatus::Failed;
+                }
+            }
+        }
+        $self.health.event_logger_overflow_count = $self.event_logger.overflow_count();
+    }};
+}
+
 // ---------------------------------------------------------------------------
 // Craton Shield orchestrator
 // ---------------------------------------------------------------------------
@@ -852,27 +889,29 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
     /// caller.  Actual execution of the action (reset, halt) is the
     /// responsibility of the caller / HAL layer.
     ///
-    /// # State-flip semantics
+    /// # Audit-trail interaction
     ///
-    /// **Important**: the watchdog log append is itself subject to the
-    /// platform's audit-trail enforcement (see the `try_log!` macro and
-    /// [`route_alert`](Self::route_alert)).  If the watchdog firing
-    /// pushes the consecutive event-log failure counter over
-    /// `MAX_LOG_FAILURES_BEFORE_FAILED`, the platform flips
-    /// `initialized = false`.  Subsequent calls to `submit_can_frame` /
-    /// `submit_eth_packet` / `tick` will then return
-    /// [`VsError::NotInitialized`] rather than the watchdog action.
-    /// Callers that want to react to the watchdog action (reset/halt)
-    /// must therefore consume the returned value on the same call —
-    /// they cannot rely on later `submit_*` returns to surface it.
+    /// The watchdog log append is **safety-critical** and is routed
+    /// through a dedicated path (`try_log_safety_critical!`) that, unlike
+    /// the ordinary `try_log!` / [`route_alert`](Self::route_alert)
+    /// pipeline, **never disables the platform**.  A degraded or failed
+    /// event log may escalate `event_logger` health to
+    /// [`SubsystemStatus::Failed`], but it will *not* flip
+    /// `initialized = false`: the watchdog expiry — the single most
+    /// safety-critical signal — is always surfaced to the caller so the
+    /// configured safe-state action (reset/halt) can be taken regardless
+    /// of audit-log health.  The returned [`WatchdogAction`] is therefore
+    /// authoritative even when the audit trail is broken.
     pub fn check_watchdog(&mut self, ts_us: u64) -> Option<WatchdogAction> {
         let elapsed = ts_us.saturating_sub(self.last_tick_us);
         if elapsed > self.watchdog_timeout_us {
-            // Log the watchdog expiry so there is an audit trail.
+            // Log the watchdog expiry so there is an audit trail, but use
+            // the safety-critical path: a failing event log must never
+            // suppress the watchdog action.
             let mut payload = [0u8; 16];
             payload[..8].copy_from_slice(&elapsed.to_le_bytes());
             payload[8] = watchdog_action_to_u8(self.watchdog_action);
-            try_log!(self, EventType::SystemEvent, &payload[..9], ts_us);
+            try_log_safety_critical!(self, EventType::SystemEvent, &payload[..9], ts_us);
             Some(self.watchdog_action)
         } else {
             None
