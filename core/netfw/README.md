@@ -62,7 +62,8 @@ Compile-time capacity selection:
 - `capacity-large`: 256 rules
 - `capacity-xl`: 512 rules
 
-See [docs/feature-flags.md](../docs/feature-flags.md) for the full reference.
+Exactly one capacity is selected at compile time; enabling `capacity-xl`
+takes precedence over `capacity-large`.
 
 ## License
 

@@ -52,12 +52,14 @@
 //! - [`RuleAction`] -- what to do on match: Allow, Drop, Log, or RateLimit.
 //! - [`Verdict`] -- the evaluation result returned to the caller.
 //!
-//! ## Public API (v1.0 stable)
+//! ## Public API (intended 1.0 surface)
 //!
 //! The `Firewall` type, the `FirewallRule` builder, the `RuleAction` /
 //! `Verdict` result types, and the per-rule `add_rule` / `evaluate`
-//! methods form the v1.0 stable surface and are governed by
-//! `DEPRECATION.md`.
+//! methods form the intended stable surface for the 1.0 release. They are
+//! governed by the workspace deprecation policy (`DEPRECATION.md` at the
+//! repository root). As an `0.x` crate this surface is not yet covered by
+//! SemVer stability guarantees.
 #![no_std]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
