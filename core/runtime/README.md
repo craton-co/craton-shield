@@ -43,7 +43,11 @@ let health = vs.health_status();
 
 ## Feature Flags
 
-See [docs/feature-flags.md](../docs/feature-flags.md) for the full reference.
+| Flag | Default | Effect |
+|:-----|:-------:|:-------|
+| `capacity-large` | off | Event-log ring buffer capacity 512 (default 256). |
+| `capacity-xl` | off | Event-log ring buffer capacity 1024 (overrides `capacity-large`). |
+| `pq` | off | Enable real ML-KEM-768 / ML-DSA-65 post-quantum cryptography (FIPS 203/204) via `vs-crypto/pq`. Without it, `StubPostQuantumProvider` is used and all `pq_*` methods return `NotInitialized`. |
 
 ## License
 
