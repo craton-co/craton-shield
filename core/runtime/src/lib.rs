@@ -956,7 +956,12 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
     /// detection.
     ///
     /// Returns [`VsError::NotInitialized`] if the platform has been shut down,
-    /// or [`VsError::PolicyViolation`] if the policy engine denies the frame.
+    /// [`VsError::PolicyViolation`] if the policy engine denies the frame, or
+    /// [`VsError::StorageError`] if a security alert raised during this
+    /// submit could not be committed to the tamper-evident audit log (a
+    /// [`RouteOutcome::Dropped`]).  In the last case the frame may have been
+    /// inspected, but the audit trail is incomplete and the caller must
+    /// treat the submit as failed.
     pub fn submit_can_frame(&mut self, frame: &CanFrame, ts_us: u64) -> Result<(), VsError> {
         if !self.initialized {
             return Err(VsError::NotInitialized);
@@ -996,7 +1001,13 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                         payload_hash: PayloadHash::ZERO,
                         timestamp_us: ts_us,
                     };
-                    self.route_alert(&alert, ts_us);
+                    // Fail-closed: a dropped audit alert means the
+                    // tamper-evident log could not record this denial.
+                    // Surface the audit-log failure rather than the
+                    // (less severe) policy violation.
+                    if self.route_alert(&alert, ts_us) == RouteOutcome::Dropped {
+                        return Err(VsError::StorageError);
+                    }
                     return Err(VsError::PolicyViolation);
                 }
                 Effect::Deny => return Err(VsError::PolicyViolation),
@@ -1009,8 +1020,14 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
 
         // --- IDS inspection (always runs for detection) ---
         let alert = self.ids_engine.submit_can_frame(frame, ts_us);
+        let mut alert_dropped = false;
         if let Some(ref a) = alert {
-            self.route_alert(a, ts_us);
+            // Fail-closed: if the security alert could not be recorded
+            // in the tamper-evident log, the submit must not silently
+            // return Ok -- track the drop and surface it below.
+            if self.route_alert(a, ts_us) == RouteOutcome::Dropped {
+                alert_dropped = true;
+            }
             let result = self.ids_engine.dispatch_and_respond(a);
             self.execute_ids_response(result.response, ts_us);
         }
@@ -1032,12 +1049,21 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                         payload_hash: PayloadHash::ZERO,
                         timestamp_us: ts_us,
                     };
-                    self.route_alert(&anomaly_alert, ts_us);
+                    if self.route_alert(&anomaly_alert, ts_us) == RouteOutcome::Dropped {
+                        alert_dropped = true;
+                    }
                 }
             }
         }
         self.last_can_ts = ts_us;
         self.can_frame_count = self.can_frame_count.saturating_add(1);
+
+        // A security alert raised during this submit could not be
+        // committed to the tamper-evident audit log -- fail closed so
+        // the caller does not mistake a lost alert for a clean submit.
+        if alert_dropped {
+            return Err(VsError::StorageError);
+        }
 
         Ok(())
     }
@@ -1046,8 +1072,11 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
     /// enforcement, and anomaly detection.
     ///
     /// Returns [`VsError::NotInitialized`] if the platform has been shut down,
-    /// or [`VsError::PolicyViolation`] if the policy engine or firewall denies
-    /// the packet.
+    /// [`VsError::PolicyViolation`] if the policy engine or firewall denies
+    /// the packet, or [`VsError::StorageError`] if a security alert raised
+    /// during this submit could not be committed to the tamper-evident
+    /// audit log (a [`RouteOutcome::Dropped`]) -- in which case the audit
+    /// trail is incomplete and the caller must treat the submit as failed.
     pub fn submit_eth_packet(&mut self, pkt: &EthPacket<'_>, ts_us: u64) -> Result<(), VsError> {
         if !self.initialized {
             return Err(VsError::NotInitialized);
@@ -1090,7 +1119,11 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                         payload_hash: PayloadHash::ZERO,
                         timestamp_us: ts_us,
                     };
-                    self.route_alert(&alert, ts_us);
+                    // Fail-closed: a dropped audit alert means the
+                    // tamper-evident log could not record this denial.
+                    if self.route_alert(&alert, ts_us) == RouteOutcome::Dropped {
+                        return Err(VsError::StorageError);
+                    }
                     return Err(VsError::PolicyViolation);
                 }
                 Effect::Deny => return Err(VsError::PolicyViolation),
@@ -1103,8 +1136,13 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
 
         // --- IDS inspection (always runs for detection purposes) ---
         let alert = self.ids_engine.submit_eth_packet(pkt, ts_us);
+        let mut alert_dropped = false;
         if let Some(ref a) = alert {
-            self.route_alert(a, ts_us);
+            // Fail-closed: a dropped security alert must not be masked
+            // by an Ok return -- track the drop and surface it below.
+            if self.route_alert(a, ts_us) == RouteOutcome::Dropped {
+                alert_dropped = true;
+            }
             let result = self.ids_engine.dispatch_and_respond(a);
             self.execute_ids_response(result.response, ts_us);
         }
@@ -1140,7 +1178,11 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                         payload_hash: PayloadHash::ZERO,
                         timestamp_us: ts_us,
                     };
-                    self.route_alert(&drop_alert, ts_us);
+                    // Fail-closed: a dropped audit alert means the
+                    // firewall drop could not be recorded.
+                    if self.route_alert(&drop_alert, ts_us) == RouteOutcome::Dropped {
+                        return Err(VsError::StorageError);
+                    }
                     return Err(VsError::PolicyViolation);
                 }
                 Verdict::Log => {
@@ -1172,12 +1214,20 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                         payload_hash: PayloadHash::ZERO,
                         timestamp_us: ts_us,
                     };
-                    self.route_alert(&anomaly_alert, ts_us);
+                    if self.route_alert(&anomaly_alert, ts_us) == RouteOutcome::Dropped {
+                        alert_dropped = true;
+                    }
                 }
             }
         }
         self.last_eth_ts = ts_us;
         self.eth_frame_count = self.eth_frame_count.saturating_add(1);
+
+        // A security alert raised during this submit could not be
+        // committed to the tamper-evident audit log -- fail closed.
+        if alert_dropped {
+            return Err(VsError::StorageError);
+        }
 
         Ok(())
     }
@@ -1532,6 +1582,11 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
     ///
     /// Any tampered region triggers a `Critical` alert and degrades
     /// `integrity` health to `Degraded`.
+    ///
+    /// Returns [`VsError::StorageError`] if a tamper alert could not be
+    /// committed to the tamper-evident audit log (a
+    /// [`RouteOutcome::Dropped`]); a tamper detection with a lost audit
+    /// record must not be reported as a clean verification pass.
     pub fn verify_integrity<'a, F>(
         &mut self,
         data_provider: F,
@@ -1543,6 +1598,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
     {
         let count = self.integrity_monitor.verify_all(data_provider, results)?;
 
+        let mut alert_dropped = false;
         for r in results[..count].iter() {
             if r.status == IntegrityStatus::Tampered {
                 self.health.integrity = SubsystemStatus::Degraded;
@@ -1554,8 +1610,17 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                     payload_hash: PayloadHash::ZERO,
                     timestamp_us: ts_us,
                 };
-                self.route_alert(&alert, ts_us);
+                if self.route_alert(&alert, ts_us) == RouteOutcome::Dropped {
+                    alert_dropped = true;
+                }
             }
+        }
+
+        // Fail-closed: a tamper detection whose Critical alert could not
+        // be committed to the audit log must not be reported as a clean
+        // verification pass.
+        if alert_dropped {
+            return Err(VsError::StorageError);
         }
 
         Ok(count)
