@@ -13,13 +13,14 @@
 //! Domain-specific subsystems (automotive, industrial, medical) are provided
 //! by addon crates that wrap `CratonShield` with domain extensions.
 //!
-//! # Public API (v1.0 stable)
+//! # Public API (0.7.1)
 //!
-//! Every `pub` item below is part of the v1.0 stable surface and governed
+//! Every `pub` item below is part of the 0.7.x public surface and governed
 //! by `DEPRECATION.md`. The `CratonShield` orchestrator type, its
 //! `init` / `tick` / `submit_*` methods, and the `PlatformConfig` builder
-//! are the stable integration surface; addon crates and FFI consumers
-//! depend on these signatures.
+//! are the integration surface; addon crates and FFI consumers depend on
+//! these signatures. The API is not yet frozen at 1.0 and may change in a
+//! future minor release per `DEPRECATION.md`.
 
 use vs_anomaly::EwmaDetector;
 use vs_crypto::{
