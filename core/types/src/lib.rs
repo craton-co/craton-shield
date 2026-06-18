@@ -1702,6 +1702,57 @@ mod tests {
         assert_eq!(h1, h2);
     }
 
+    /// Official SipHash-2-4 known-answer test (KAT).
+    ///
+    /// Vectors are taken verbatim from the reference implementation by
+    /// Aumasson & Bernstein (`vectors.h` in the SipHash reference code,
+    /// <https://github.com/veorq/SipHash>). The key is the 16-byte
+    /// sequence `00 01 02 ... 0f`, i.e. `k0 = 0x0706050403020100` and
+    /// `k1 = 0x0f0e0d0c0b0a0908`. Input `i` is the `i`-byte sequence
+    /// `00 01 ... (i-1)`.
+    ///
+    /// This pins absolute output values: a wrong magic init constant,
+    /// rotation count, or round count cannot pass silently. The 16
+    /// vectors below exercise the empty input, every partial-tail
+    /// length (1..=7), a full 8-byte block, and multi-block inputs.
+    #[test]
+    fn siphash_known_answer_vectors() {
+        const K0: u64 = 0x0706_0504_0302_0100;
+        const K1: u64 = 0x0f0e_0d0c_0b0a_0908;
+
+        // Reference output for inputs of length 0..=15 (little-endian u64).
+        const VECTORS: [u64; 16] = [
+            0x726f_db47_dd0e_0e31,
+            0x74f8_39c5_93dc_67fd,
+            0x0d6c_8009_d9a9_4f5a,
+            0x8567_6696_d7fb_7e2d,
+            0xcf27_94e0_2771_87b7,
+            0x1876_5564_cd99_a68d,
+            0xcbc9_466e_58fe_e3ce,
+            0xab02_00f5_8b01_d137,
+            0x93f5_f579_9a93_2462,
+            0x9e00_82df_0ba9_e4b0,
+            0x7a5d_bbc5_94dd_b9f3,
+            0xf4b3_2f46_226b_ada7,
+            0x751e_8fbc_860e_e5fb,
+            0x14ea_5627_c084_3d90,
+            0xf723_ca90_8e7a_f2ee,
+            0xa129_ca61_49be_45e5,
+        ];
+
+        for (i, &expected) in VECTORS.iter().enumerate() {
+            let input: alloc::vec::Vec<u8> = (0u8..i as u8).collect();
+            assert_eq!(
+                siphash_2_4(&input, K0, K1),
+                expected,
+                "SipHash-2-4 KAT mismatch at input length {i}",
+            );
+        }
+
+        // The empty-input vector is the canonical single-value check.
+        assert_eq!(siphash_2_4(b"", K0, K1), 0x726f_db47_dd0e_0e31);
+    }
+
     #[test]
     fn siphash_different_keys_differ() {
         let h1 = siphash_2_4(b"hello", 0xDEAD, 0xBEEF);
