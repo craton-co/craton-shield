@@ -12,6 +12,28 @@
 //! public surface below is *intended-stable* and changes are tracked in the
 //! repository's deprecation policy, but — per semver — pre-1.0 minor
 //! releases may still make breaking changes.
+//!
+//! # Example
+//!
+//! ```
+//! use vs_types::{VehicleId, SecurityAlert, AlertSeverity, PayloadHash, SOURCE_CAN};
+//!
+//! // Validate a VIN.
+//! let vin = VehicleId::new(b"WBA3A5C55CF256789").unwrap();
+//! assert_eq!(vin.vin().len(), 17);
+//!
+//! // Create a security alert (rejects zero timestamps).
+//! let alert = SecurityAlert::new(
+//!     1,
+//!     AlertSeverity::High,
+//!     SOURCE_CAN,
+//!     42,
+//!     PayloadHash([0xAB; 32]),
+//!     1_000_000,
+//! )
+//! .unwrap();
+//! assert_eq!(alert.severity(), AlertSeverity::High);
+//! ```
 
 // ---------------------------------------------------------------------------
 // Public API (0.7.x — intended-stable)
