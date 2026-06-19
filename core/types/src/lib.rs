@@ -8,19 +8,24 @@
 //! This crate is the leaf-level definition site for the workspace's shared
 //! types: the unified [`VsError`] enum, [`VehicleId`], [`SecurityAlert`],
 //! [`PayloadHash`], [`KeyId`], the L3/L4 network parsing types, and the
-//! SipHash-2-4 / FNV-1a hashing primitives. Every public item below is part
-//! of the v1.0 stable surface and governed by `DEPRECATION.md`.
+//! SipHash-2-4 / FNV-1a hashing primitives. This is a `0.7.x` crate: the
+//! public surface below is *intended-stable* and changes are tracked in the
+//! repository's deprecation policy, but — per semver — pre-1.0 minor
+//! releases may still make breaking changes.
 
 // ---------------------------------------------------------------------------
-// Public API (v1.0 stable)
+// Public API (0.7.x — intended-stable)
 // ---------------------------------------------------------------------------
 //
-// Every `pub` item declared below this banner is part of the v1.0 stable
-// surface and governed by `DEPRECATION.md`. Enum discriminants on the
-// field-less enums `VsError`, `AlertSeverity`, `BusType`, and `TcpState`
-// are pinned and form part of the stable ABI for FFI consumers. The
-// payload-bearing enums (`IpAddr`, `IpProtocol`) are stable but cannot
-// receive explicit numeric discriminants.
+// Every `pub` item declared below this banner is part of the intended-stable
+// public surface and is tracked by the repository's deprecation policy.
+// Enum discriminants on the field-less enums `VsError`, `AlertSeverity`,
+// `BusType`, and `TcpState` are pinned and form the intended-stable ABI for
+// FFI consumers. The payload-bearing enums (`IpAddr`, `IpProtocol`) are
+// stable but cannot receive explicit numeric discriminants. As this is a
+// pre-1.0 (`0.7.x`) crate, semver still permits breaking changes in minor
+// releases; the discriminant pinning is a forward-compatibility guarantee,
+// not a frozen 1.0 ABI.
 //
 // Items marked `#[cfg(test)]`, `pub(crate)`, or behind a `feature = "…"`
 // gate are NOT part of the stable surface.
@@ -62,9 +67,10 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 ///
 /// # Stability
 ///
-/// Discriminants are pinned for v1.0.0 and form part of the stable ABI. New
-/// variants will only ever be appended (with a freshly chosen unused
-/// discriminant); existing values must never be reused or reordered.
+/// Discriminants are pinned for the `0.7.x` series and form part of the
+/// intended-stable ABI. New variants will only ever be appended (with a
+/// freshly chosen unused discriminant); existing values must never be
+/// reused or reordered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 #[non_exhaustive]
@@ -303,8 +309,9 @@ impl fmt::Debug for VehicleId {
 ///
 /// # Stability
 ///
-/// Discriminants are pinned for v1.0.0 and form part of the stable ABI for
-/// FFI consumers. New variants are appended with fresh discriminants;
+/// Discriminants are pinned for the `0.7.x` series and form part of the
+/// intended-stable ABI for FFI consumers. New variants are appended with
+/// fresh discriminants;
 /// existing values are never reordered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
@@ -362,7 +369,8 @@ impl fmt::Display for BusType {
 ///
 /// # Stability
 ///
-/// Discriminants are pinned for v1.0.0 and form part of the stable ABI. The
+/// Discriminants are pinned for the `0.7.x` series and form part of the
+/// intended-stable ABI. The
 /// numeric ordering (`Info < Low < Medium < High < Critical`) is part of the
 /// type's contract — callers compare severities by `<`/`>` and rely on the
 /// numeric ordering matching the semantic ordering.
@@ -794,7 +802,8 @@ pub mod tcp_flags {
 ///
 /// # Stability
 ///
-/// Discriminants are pinned for v1.0.0 and form part of the stable ABI.
+/// Discriminants are pinned for the `0.7.x` series and form part of the
+/// intended-stable ABI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 #[non_exhaustive]
