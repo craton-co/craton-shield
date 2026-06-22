@@ -9,6 +9,20 @@
 //! platforms (NXP S32G, Infineon AURIX, QEMU, etc.). By programming
 //! against these traits the core `Craton Shield` logic remains
 //! platform-independent.
+//!
+//! # Example
+//!
+//! ```
+//! use vs_hal::{CanBus, Timer};
+//!
+//! /// Drain one CAN frame (if any) and return its hardware ID paired with
+//! /// the timestamp the application observed it.
+//! fn process<B: CanBus, T: Timer>(bus: &mut B, timer: &T) -> Option<(u32, u64)> {
+//!     let frame = bus.receive().ok()??;
+//!     let now = timer.now_us();
+//!     Some((frame.id, now))
+//! }
+//! ```
 
 use vs_types::VsError;
 
