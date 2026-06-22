@@ -21,13 +21,14 @@ core crates program against these traits.
 ## Usage
 
 ```rust
-use vs_hal::{CanBus, Timer, RawCanFrame};
+use vs_hal::{CanBus, Timer};
 
-fn process<B: CanBus, T: Timer>(bus: &mut B, timer: &T) {
-    if let Ok(Some(frame)) = bus.receive() {
-        let now = timer.now_us();
-        // process frame at timestamp `now`
-    }
+/// Drain one CAN frame (if any) and return its hardware ID paired with the
+/// timestamp the application observed it.
+fn process<B: CanBus, T: Timer>(bus: &mut B, timer: &T) -> Option<(u32, u64)> {
+    let frame = bus.receive().ok()??;
+    let now = timer.now_us();
+    Some((frame.id, now))
 }
 ```
 
