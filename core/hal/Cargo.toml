@@ -13,7 +13,14 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-stub-hsm = []
+# Generic, security-neutral test doubles: stub CAN bus, Ethernet PHY, timer,
+# watchdog, and secure storage. These contain no cryptographic code and are
+# safe to enable in any build (including release) for downstream testing.
+test-stubs = []
+# Insecure stub HSM (`StubHsmHardware`) with deterministic placeholder crypto.
+# Implies `test-stubs` for convenience. This feature is fenced out of release
+# builds by a `compile_error!` — it must NEVER be enabled in production.
+stub-hsm = ["test-stubs"]
 # Forward-looking, experimental: surfaces the `Tpm2Transport` trait stub for
 # downstream consumers to prototype a real TPM 2.0 TIS/CRB transport. The
 # API is NOT finalized — do not implement in production until v1.0.
