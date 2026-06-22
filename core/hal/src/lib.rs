@@ -898,13 +898,13 @@ pub trait Tpm2Transport {
 // Stub implementations for testing
 // ---------------------------------------------------------------------------
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 /// Stub CAN bus that always returns no frames and discards transmissions.
 pub struct StubCanBus {
     bitrate: u32,
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl StubCanBus {
     /// Construct a [`StubCanBus`] reporting the given fixed bitrate.
     pub const fn new(bitrate: u32) -> Self {
@@ -912,7 +912,7 @@ impl StubCanBus {
     }
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl CanBus for StubCanBus {
     fn receive(&mut self) -> Result<Option<RawCanFrame>, VsError> {
         Ok(None)
@@ -928,14 +928,14 @@ impl CanBus for StubCanBus {
     }
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 /// Stub Ethernet PHY that always returns no frames and discards transmissions.
 pub struct StubEthernetPhy {
     link_speed: u32,
     link_up: bool,
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl StubEthernetPhy {
     /// Construct a [`StubEthernetPhy`] reporting the given link speed
     /// (Mbit/s) and an initially up link.
@@ -952,14 +952,14 @@ impl StubEthernetPhy {
     }
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl Default for StubEthernetPhy {
     fn default() -> Self {
         Self::new(1000)
     }
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl EthernetPhy for StubEthernetPhy {
     fn receive(&mut self) -> Result<Option<RawEthFrame>, VsError> {
         Ok(None)
@@ -1222,12 +1222,12 @@ impl HsmHardware for StubHsmHardware {
 /// The timer enforces monotonicity: [`set`](Self::set) will only move time
 /// forward. Use `set_unchecked` in tests that
 /// intentionally need to violate monotonicity.
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 pub struct StubTimer {
     current_us: u64,
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl StubTimer {
     /// Construct a [`StubTimer`] initialized to `start_us` microseconds.
     pub const fn new(start_us: u64) -> Self {
@@ -1261,7 +1261,7 @@ impl StubTimer {
     }
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl Timer for StubTimer {
     fn now_us(&self) -> u64 {
         self.current_us
@@ -1272,14 +1272,14 @@ impl Timer for StubTimer {
 }
 
 /// Stub watchdog that tracks state but never resets.
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 pub struct StubWatchdog {
     running: bool,
     timeout_us: u64,
     kick_count: u64,
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl StubWatchdog {
     /// Construct a stopped [`StubWatchdog`] with a zero timeout and zero
     /// kick count.
@@ -1299,14 +1299,14 @@ impl StubWatchdog {
     }
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl Default for StubWatchdog {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl Watchdog for StubWatchdog {
     fn start(&mut self, timeout_us: u64) -> Result<(), VsError> {
         if timeout_us == 0 {
@@ -1340,7 +1340,7 @@ impl Watchdog for StubWatchdog {
 }
 
 /// A single key-value entry in [`StubSecureStorage`].
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 #[derive(Clone, Copy)]
 struct StorageEntry {
     key: [u8; MAX_STORAGE_KEY_LEN],
@@ -1352,15 +1352,15 @@ struct StorageEntry {
 /// In-memory secure storage for testing.
 ///
 /// **Not for production use.** Gated behind `cfg(any(test, feature =
-/// "stub-hsm"))` so the in-memory stub cannot ship into release builds.
-#[cfg(any(test, feature = "stub-hsm"))]
+/// "test-stubs"))` so the in-memory stub cannot ship into release builds.
+#[cfg(any(test, feature = "test-stubs"))]
 pub struct StubSecureStorage {
     entries: [Option<StorageEntry>; 32],
     entry_count: usize,
     counters: [Option<u64>; 8],
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl StubSecureStorage {
     /// Create an empty stub storage with no entries and no counters.
     pub fn new() -> Self {
@@ -1384,14 +1384,14 @@ impl StubSecureStorage {
     }
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl Default for StubSecureStorage {
     fn default() -> Self {
         Self::new()
     }
 }
 
-#[cfg(any(test, feature = "stub-hsm"))]
+#[cfg(any(test, feature = "test-stubs"))]
 impl SecureStorage for StubSecureStorage {
     fn read(&self, key: &[u8], value_out: &mut [u8]) -> Result<usize, VsError> {
         if key.is_empty() {
