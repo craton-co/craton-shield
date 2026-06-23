@@ -156,6 +156,17 @@ pub struct LinuxCanBus {
     /// frames can arrive at hundreds of Hz, and each refresh opens two
     /// sysfs files — the rate-limit keeps the cost bounded.
     last_stats_read_us: u64,
+    /// Count of datagrams consumed from the socket but discarded because
+    /// their length did not match a classic or CAN-FD frame.
+    ///
+    /// `recvmmsg(2)` can hand back a datagram whose size is neither
+    /// `size_of::<KernelCanFrame>()` nor `size_of::<KernelCanFdFrame>()`
+    /// (a malformed or truncated frame). Such a datagram cannot be decoded
+    /// into a [`RawCanFrame`], so it is dropped — but for an IDS a silently
+    /// vanishing frame is a detection blind spot. This saturating counter
+    /// records every such drop so callers can observe it via
+    /// [`Self::dropped_frames`].
+    dropped_frames: u64,
     /// Cached scratch arrays for `recvmmsg(2)` batch receive.
     batch_scratch: CanBatchScratch,
 }
@@ -389,9 +400,24 @@ impl LinuxCanBus {
                 },
                 last_timestamp_us: 0,
                 last_stats_read_us: 0,
+                dropped_frames: 0,
                 batch_scratch: CanBatchScratch::new(),
             })
         }
+    }
+
+    /// Number of datagrams received but discarded because their length did
+    /// not correspond to a classic or CAN-FD frame.
+    ///
+    /// `recv_batch` drains frames with `recvmmsg(2)`; a datagram whose size
+    /// is neither classic- nor FD-sized cannot be decoded and is dropped.
+    /// Because the return value of `recv_batch` only counts *successfully
+    /// decoded* frames, a caller cannot otherwise tell that a malformed
+    /// frame was consumed. This monotonically increasing (saturating)
+    /// counter exposes that loss so an IDS can detect the blind spot — for
+    /// example by alarming when it advances unexpectedly.
+    pub fn dropped_frames(&self) -> u64 {
+        self.dropped_frames
     }
 
     /// Read the Linux network interface operational state from sysfs.
@@ -931,6 +957,11 @@ impl LinuxCanBus {
     /// Returns the number of frames written into the front of `frames`.
     /// Error frames are decoded into internal state and skipped (they do
     /// not occupy a slot in `frames`).
+    ///
+    /// A datagram whose length matches neither a classic nor a CAN-FD
+    /// frame cannot be decoded; it is discarded and the per-bus
+    /// [`Self::dropped_frames`] counter is incremented so the caller can
+    /// detect the loss.
     fn recv_batch_impl(
         &mut self,
         frames: &mut [RawCanFrame],
@@ -1047,9 +1078,18 @@ impl LinuxCanBus {
                     frames[out] = frame;
                     out += 1;
                 }
-                // Other sizes are silently dropped (malformed datagram).
+                else {
+                    // Datagram is neither classic- nor FD-sized: it cannot
+                    // be decoded into a frame. Count the drop so the caller
+                    // can detect the loss via `dropped_frames()` rather than
+                    // having a malformed frame silently disappear.
+                    self.dropped_frames = self.dropped_frames.saturating_add(1);
+                }
             } else {
                 if msg_len < core::mem::size_of::<KernelCanFrame>() {
+                    // Short datagram on a classic socket — undecodable.
+                    // Record the drop instead of silently skipping it.
+                    self.dropped_frames = self.dropped_frames.saturating_add(1);
                     continue;
                 }
                 // Treat the buffer as a classic frame (the leading 16 bytes
@@ -1320,6 +1360,7 @@ mod tests {
             },
             last_timestamp_us: 0,
             last_stats_read_us: 0,
+            dropped_frames: 0,
             batch_scratch: CanBatchScratch::new(),
         };
         bus.process_error_frame(CAN_ERR_FLAG | CAN_ERR_BUSOFF, &[0u8; 8]);
@@ -1341,6 +1382,7 @@ mod tests {
             },
             last_timestamp_us: 0,
             last_stats_read_us: 0,
+            dropped_frames: 0,
             batch_scratch: CanBatchScratch::new(),
         };
         bus.process_error_frame(CAN_ERR_FLAG | CAN_ERR_ACK, &[0u8; 8]);
@@ -1362,6 +1404,7 @@ mod tests {
             },
             last_timestamp_us: 0,
             last_stats_read_us: 0,
+            dropped_frames: 0,
             batch_scratch: CanBatchScratch::new(),
         };
         let mut data = [0u8; 8];
@@ -1385,12 +1428,34 @@ mod tests {
             },
             last_timestamp_us: 0,
             last_stats_read_us: 0,
+            dropped_frames: 0,
             batch_scratch: CanBatchScratch::new(),
         };
         let mut data = [0u8; 8];
         data[1] = CAN_ERR_CRTL_RX_OVERFLOW;
         bus.process_error_frame(CAN_ERR_FLAG | CAN_ERR_CRTL, &data);
         assert_eq!(bus.last_error, CanError::Overrun);
+        drop(bus);
+    }
+
+    #[test]
+    fn dropped_frames_starts_at_zero() {
+        let bus = LinuxCanBus {
+            fd: -1,
+            bitrate: 500_000,
+            fd_enabled: false,
+            ifname: [0u8; libc::IFNAMSIZ],
+            last_error: CanError::None,
+            error_counters: CanErrorCounters {
+                tx_error_count: 0,
+                rx_error_count: 0,
+            },
+            last_timestamp_us: 0,
+            last_stats_read_us: 0,
+            dropped_frames: 0,
+            batch_scratch: CanBatchScratch::new(),
+        };
+        assert_eq!(bus.dropped_frames(), 0);
         drop(bus);
     }
 }
