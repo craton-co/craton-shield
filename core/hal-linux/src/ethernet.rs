@@ -110,7 +110,6 @@ struct EthtoolIfreq {
 /// ```
 pub struct LinuxEthernetPhy {
     fd: libc::c_int,
-    ifindex: libc::c_int,
     /// Cached interface name for ioctl queries.
     ifname: [libc::c_char; libc::IFNAMSIZ],
     /// Cached `(timestamp_us, mbps)` for [`Self::link_speed_mbps`] — 1s TTL.
@@ -289,7 +288,6 @@ impl LinuxEthernetPhy {
 
             Ok(Self {
                 fd,
-                ifindex,
                 ifname,
                 cached_speed: core::cell::Cell::new(None),
                 batch_scratch: BatchScratch::new(),
@@ -482,14 +480,13 @@ impl EthernetPhy for LinuxEthernetPhy {
     fn link_is_up(&self) -> bool {
         // SAFETY: ioctl with a valid fd and stack-allocated ifreq.
         let mut ifr: libc::ifreq = unsafe { core::mem::zeroed() };
-        // Reconstruct the interface name from ifindex via SIOCGIFNAME
-        ifr.ifr_ifru.ifru_ifindex = self.ifindex;
-        let ret_name = retry_on_eintr!(unsafe {
-            libc::ioctl(self.fd, libc::SIOCGIFNAME as libc::c_ulong, &raw mut ifr)
-        });
-        if ret_name < 0 {
-            return false;
-        }
+        // Populate `ifr_name` directly from the cached interface name. The
+        // name was validated and recorded at open() time, so a separate
+        // SIOCGIFNAME round-trip (to derive the name from `ifindex`) is
+        // unnecessary — and undesirable: a SIOCGIFNAME failure would be
+        // indistinguishable from a genuinely down link. Using the cached
+        // name removes that ambiguity and one syscall.
+        ifr.ifr_name = self.ifname;
         // Query flags
         let ret_flags = retry_on_eintr!(unsafe {
             libc::ioctl(self.fd, libc::SIOCGIFFLAGS as libc::c_ulong, &raw mut ifr)
@@ -619,7 +616,6 @@ mod tests {
         // pre-check. The length check happens before the write syscall.
         let mut phy = LinuxEthernetPhy {
             fd: -1,
-            ifindex: 0,
             ifname: [0 as libc::c_char; libc::IFNAMSIZ],
             cached_speed: core::cell::Cell::new(None),
             batch_scratch: BatchScratch::new(),
@@ -634,7 +630,6 @@ mod tests {
     fn truncated_frames_starts_at_zero() {
         let phy = LinuxEthernetPhy {
             fd: -1,
-            ifindex: 0,
             ifname: [0 as libc::c_char; libc::IFNAMSIZ],
             cached_speed: core::cell::Cell::new(None),
             batch_scratch: BatchScratch::new(),
