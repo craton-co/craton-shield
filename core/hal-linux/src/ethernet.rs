@@ -121,6 +121,19 @@ pub struct LinuxEthernetPhy {
     /// Cached scratch arrays for `recvmmsg(2)` batch receive, reused
     /// across calls to amortise the per-call zero-init cost.
     batch_scratch: BatchScratch,
+    /// Count of frames received whose true on-wire length exceeded
+    /// [`MAX_ETH_FRAME_LEN`] and were therefore truncated into the buffer.
+    ///
+    /// `AF_PACKET` `SOCK_RAW` can deliver a frame larger than the
+    /// `MAX_ETH_FRAME_LEN` receive buffer (e.g. a 9000-byte jumbo frame).
+    /// The kernel copies only the first `MAX_ETH_FRAME_LEN` bytes; the
+    /// [`RawEthFrame::len`] field is `u16` and cannot represent the real
+    /// size. Without `MSG_TRUNC` the consumer could not distinguish a
+    /// genuine maximum-size frame from a truncated jumbo frame — a
+    /// detection-evasion vector for an Ethernet IDS. `MSG_TRUNC` makes the
+    /// kernel report the *real* length, and every truncation is recorded
+    /// in this saturating counter, observable via [`Self::truncated_frames`].
+    truncated_frames: u64,
 }
 
 /// Maximum number of frames consumed by a single `recvmmsg(2)` call.
@@ -280,6 +293,7 @@ impl LinuxEthernetPhy {
                 ifname,
                 cached_speed: core::cell::Cell::new(None),
                 batch_scratch: BatchScratch::new(),
+                truncated_frames: 0,
             })
         }
     }
@@ -315,6 +329,21 @@ impl LinuxEthernetPhy {
         let result = sec.saturating_mul(1_000_000).saturating_add(nsec / 1_000);
         LAST_TIMESTAMP_US.store(result, Ordering::Relaxed);
         result
+    }
+
+    /// Number of received frames whose true on-wire length exceeded
+    /// [`MAX_ETH_FRAME_LEN`] and were therefore truncated into the buffer.
+    ///
+    /// Both [`EthernetPhy::receive`] and `recv_batch` request `MSG_TRUNC`
+    /// so the kernel reports the real frame length even when it exceeds
+    /// the receive buffer. Each such oversized frame increments this
+    /// monotonically increasing (saturating) counter. An IDS should treat
+    /// a non-zero — or advancing — value as a signal that oversized frames
+    /// are present on the wire, since a truncated frame's payload cannot
+    /// be fully inspected and silent truncation is a detection-evasion
+    /// vector.
+    pub fn truncated_frames(&self) -> u64 {
+        self.truncated_frames
     }
 
     /// Query link speed via the legacy `ETHTOOL_GSET` ioctl.
@@ -362,12 +391,21 @@ impl Drop for LinuxEthernetPhy {
 impl EthernetPhy for LinuxEthernetPhy {
     fn receive(&mut self) -> Result<Option<RawEthFrame>, VsError> {
         let mut frame = RawEthFrame::zeroed();
-        // SAFETY: reading into a valid, stack-allocated buffer.
+        // SAFETY: receiving into a valid, stack-allocated buffer.
         // Retry on EINTR (signal interruption) — signal-safe semantics for
         // a non-blocking socket where the kernel's automatic restart does
-        // not apply.
+        // not apply. `MSG_TRUNC` makes `recv` return the real on-wire
+        // length even when the frame is larger than the buffer, so an
+        // oversized (truncated) frame can be detected instead of silently
+        // passing as a full-size frame — a detection-evasion concern for
+        // an Ethernet IDS.
         let n = retry_on_eintr!(unsafe {
-            libc::read(self.fd, frame.data.as_mut_ptr().cast(), frame.data.len())
+            libc::recv(
+                self.fd,
+                frame.data.as_mut_ptr().cast(),
+                frame.data.len(),
+                libc::MSG_TRUNC,
+            )
         });
         if n < 0 {
             let err = errno_to_vserror();
@@ -378,10 +416,19 @@ impl EthernetPhy for LinuxEthernetPhy {
             };
         }
 
-        // Safely clamp the received length to u16 range and buffer size.
-        // `n` is `libc::ssize_t` (i64 on 64-bit); after the `n < 0` guard
-        // above the cast to usize is well-defined.
-        let received = usize::try_from(n).unwrap_or(0).min(MAX_ETH_FRAME_LEN);
+        // `n` is the real on-wire length (MSG_TRUNC). `n` is `libc::ssize_t`
+        // (i64 on 64-bit); after the `n < 0` guard above the cast to usize
+        // is well-defined.
+        let real_len = usize::try_from(n).unwrap_or(0);
+        if real_len > MAX_ETH_FRAME_LEN {
+            // Only the first MAX_ETH_FRAME_LEN bytes were captured. Record
+            // the truncation so callers can detect that an oversized frame
+            // — whose payload cannot be fully inspected — was observed.
+            self.truncated_frames = self.truncated_frames.saturating_add(1);
+        }
+        // Clamp the stored length to the buffer size; `len` is u16 and the
+        // buffer holds at most MAX_ETH_FRAME_LEN bytes.
+        let received = real_len.min(MAX_ETH_FRAME_LEN);
         frame.len = received as u16;
 
         // Use monotonic clock for consistent timestamps.
@@ -464,6 +511,14 @@ impl BatchReceive for LinuxEthernetPhy {
     /// Replaces N independent `read(2)` calls with a single syscall when
     /// multiple frames are pending. Frames written beyond the returned
     /// index are unspecified.
+    ///
+    /// The call requests `MSG_TRUNC` so the kernel reports each datagram's
+    /// real on-wire length. A frame longer than [`MAX_ETH_FRAME_LEN`] is
+    /// copied only up to the buffer size and its [`RawEthFrame::len`] is
+    /// clamped, but every such truncation increments
+    /// [`Self::truncated_frames`] so the caller can detect that an
+    /// oversized frame — whose payload cannot be fully inspected — was
+    /// observed.
     fn recv_batch(&mut self, frames: &mut [RawEthFrame], count: usize) -> Result<usize, VsError> {
         let max = count.min(frames.len()).min(ETH_MAX_BATCH);
         if max == 0 {
@@ -489,13 +544,16 @@ impl BatchReceive for LinuxEthernetPhy {
         // SAFETY: recvmmsg(2) — fd is valid, headers point to valid heap-stable
         // memory inside `self.batch_scratch`, and each iov_base points into
         // `frames[i].data` which is sized to MAX_ETH_FRAME_LEN bytes.
-        // Retry on EINTR for signal-safe behavior.
+        // Retry on EINTR for signal-safe behavior. `MSG_TRUNC` makes the
+        // kernel report the real datagram length in `msg_len` even when the
+        // frame is larger than the receive buffer, so oversized (truncated)
+        // frames can be detected rather than silently passing as full-size.
         let received = retry_on_eintr!(unsafe {
             libc::recvmmsg(
                 self.fd,
                 scratch.hdrs.as_mut_ptr(),
                 max as libc::c_uint,
-                libc::MSG_DONTWAIT,
+                libc::MSG_DONTWAIT | libc::MSG_TRUNC,
                 core::ptr::null_mut(),
             )
         });
@@ -510,11 +568,21 @@ impl BatchReceive for LinuxEthernetPhy {
 
         let received = usize::try_from(received).unwrap_or(0);
         let ts = Self::timestamp_us();
+        let mut truncated = 0u64;
         for i in 0..received {
-            let safe_len = (scratch.hdrs[i].msg_len as usize).min(MAX_ETH_FRAME_LEN);
+            // With MSG_TRUNC, `msg_len` is the real on-wire length. If it
+            // exceeds the buffer, only `MAX_ETH_FRAME_LEN` bytes were
+            // captured: clamp `len` and record the truncation so the
+            // caller is not fooled into treating it as a complete frame.
+            let real_len = scratch.hdrs[i].msg_len as usize;
+            if real_len > MAX_ETH_FRAME_LEN {
+                truncated = truncated.saturating_add(1);
+            }
+            let safe_len = real_len.min(MAX_ETH_FRAME_LEN);
             frames[i].len = safe_len as u16;
             frames[i].timestamp_us = ts;
         }
+        self.truncated_frames = self.truncated_frames.saturating_add(truncated);
         Ok(received)
     }
 
@@ -555,9 +623,24 @@ mod tests {
             ifname: [0 as libc::c_char; libc::IFNAMSIZ],
             cached_speed: core::cell::Cell::new(None),
             batch_scratch: BatchScratch::new(),
+            truncated_frames: 0,
         };
         let err = phy.transmit(&data);
         assert_eq!(err, Err(VsError::ResourceExhausted));
+        drop(phy);
+    }
+
+    #[test]
+    fn truncated_frames_starts_at_zero() {
+        let phy = LinuxEthernetPhy {
+            fd: -1,
+            ifindex: 0,
+            ifname: [0 as libc::c_char; libc::IFNAMSIZ],
+            cached_speed: core::cell::Cell::new(None),
+            batch_scratch: BatchScratch::new(),
+            truncated_frames: 0,
+        };
+        assert_eq!(phy.truncated_frames(), 0);
         drop(phy);
     }
 
