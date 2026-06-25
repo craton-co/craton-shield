@@ -7,8 +7,12 @@ use vs_hal::Timer;
 
 /// Linux monotonic timer backed by `CLOCK_MONOTONIC_RAW`.
 ///
-/// On aarch64, [`cycle_count`](Timer::cycle_count) reads `PMCCNTR_EL0`
-/// (requires kernel to enable userspace access via `PMUSERENR_EL0`).
+/// On aarch64, [`cycle_count`](Timer::cycle_count) reads `PMCCNTR_EL0`.
+/// EL0 access to that register is gated by `PMUSERENR_EL0.EN`, which a
+/// stock Linux kernel leaves disabled; in that case `cycle_count` returns
+/// `None` rather than crashing. It probes `PMUSERENR_EL0` (always EL0
+/// readable) and only reads `PMCCNTR_EL0` when userspace access is
+/// enabled, so it never executes a trapping instruction.
 /// On x86_64 it reads the TSC via `RDTSC`.
 pub struct LinuxTimer {
     /// Last known good timestamp for fallback on `clock_gettime` failure.
@@ -59,9 +63,31 @@ impl Timer for LinuxTimer {
     fn cycle_count(&self) -> Option<u64> {
         #[cfg(target_arch = "aarch64")]
         {
+            // Reading `PMCCNTR_EL0` from EL0 traps (delivering SIGILL) unless
+            // the kernel has set `PMUSERENR_EL0.EN`. On a stock Linux kernel
+            // userspace PMU access is *off* by default, so an unconditional
+            // `mrs pmccntr_el0` would crash the process.
+            //
+            // `PMUSERENR_EL0` is itself always readable from EL0 without
+            // trapping. Probe its `EN` bit (bit 0) first: if userspace PMU
+            // access is disabled, fail closed by returning `None` rather
+            // than executing the trapping instruction.
+            let usved: u64;
+            // SAFETY: `mrs` of `PMUSERENR_EL0` is an unprivileged,
+            // non-trapping read on every ARMv8-A implementation.
+            unsafe {
+                core::arch::asm!("mrs {}, pmuserenr_el0", out(reg) usved);
+            }
+            if usved & 1 == 0 {
+                // EL0 PMU access not enabled by the kernel — reading
+                // PMCCNTR_EL0 would SIGILL. Report cycle counting as
+                // unavailable instead.
+                return None;
+            }
             let count: u64;
-            // SAFETY: reading PMCCNTR_EL0 is a read-only operation.
-            // Requires PMUSERENR_EL0.EN to be set by the kernel.
+            // SAFETY: `PMUSERENR_EL0.EN` was just confirmed set, so reading
+            // `PMCCNTR_EL0` from EL0 is permitted and does not trap. The
+            // read is side-effect free.
             unsafe {
                 core::arch::asm!("mrs {}, pmccntr_el0", out(reg) count);
             }
@@ -112,10 +138,16 @@ mod tests {
     fn timer_cycle_count_available_on_this_platform() {
         let timer = LinuxTimer::new();
         let count = timer.cycle_count();
-        // On x86_64 and aarch64, cycle_count should return Some.
-        // On other platforms, it returns None.
-        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+        // On x86_64 `RDTSC` is always available, so `Some` is guaranteed.
+        #[cfg(target_arch = "x86_64")]
         assert!(count.is_some());
+        // On aarch64 the result depends on whether the kernel enabled EL0
+        // PMU access (`PMUSERENR_EL0.EN`). When it is disabled `cycle_count`
+        // correctly returns `None` instead of executing a trapping `mrs`
+        // and crashing — so either outcome is valid here.
+        #[cfg(target_arch = "aarch64")]
+        let _ = count;
+        // On all other architectures cycle counting is unsupported.
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         assert!(count.is_none());
     }
