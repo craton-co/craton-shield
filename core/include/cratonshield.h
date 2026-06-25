@@ -13,10 +13,10 @@
  * All vs_* functions are internally synchronized via mutexes and may be called
  * from any thread. However, the following constraints apply:
  *
- *  - vs_platform_init() / vs_platform_init_permissive() must be called exactly
- *    once before any other vs_* function. Calling init concurrently from
- *    multiple threads is safe (one will succeed, others return
- *    VS_ERR_ALREADY_INITIALIZED) but not recommended.
+ *  - vs_platform_init() must be called exactly once before any other vs_*
+ *    function. Calling init concurrently from multiple threads is safe (one
+ *    will succeed, others return VS_ERR_ALREADY_INITIALIZED) but not
+ *    recommended.
  *
  *  - vs_platform_shutdown() must not be called concurrently with other vs_*
  *    functions. After shutdown returns, all other calls return
@@ -232,19 +232,6 @@ uint32_t vs_abi_version(void);
  *         VS_ERR_STATE_CORRUPTED if the platform is in degraded state.
  */
 VsResult vs_platform_init(void);
-
-/**
- * Initialize the platform in permissive (fail-open) mode.
- *
- * Identical to vs_platform_init() except that frames arriving before
- * any policy rules are loaded are **allowed** through instead of blocked.
- * Use only during development or bring-up; production should use
- * vs_platform_init().
- *
- * @return VS_OK on success, VS_ERR_INTERNAL on failure,
- *         VS_ERR_STATE_CORRUPTED if the platform is in degraded state.
- */
-VsResult vs_platform_init_permissive(void);
 
 /**
  * Tick the platform.
