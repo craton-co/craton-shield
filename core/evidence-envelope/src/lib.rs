@@ -320,10 +320,13 @@ impl<T> Evidence<T> {
     /// Compatibility accessor — returns an `EvidenceMetadata` snapshot
     /// assembled from the envelope's stored fields. Provided so callers
     /// authored against the alternate metadata-struct API can read the
-    /// stored values without per-field accessor calls. `assessor_id` and
-    /// `input_hash` are zero-filled because the envelope does not store
-    /// them (caller-supplied metadata flows through [`Self::with_metadata`]
-    /// and may carry non-zero values).
+    /// stored values without per-field accessor calls.
+    ///
+    /// `assessor_id` and `input_hash` reflect the values currently stored
+    /// on the envelope: they are zero for an envelope built with
+    /// [`Self::new`] (which does not accept them) and carry the
+    /// caller-supplied values for an envelope built with
+    /// [`Self::with_metadata`].
     #[must_use]
     pub fn metadata(&self) -> EvidenceMetadata {
         let mut tool_version = [0u8; 16];
