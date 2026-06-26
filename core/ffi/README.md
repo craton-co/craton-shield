@@ -46,7 +46,14 @@ vs_platform_shutdown();
 
 ## Feature Flags
 
-See [docs/feature-flags.md](../../docs/feature-flags.md) for the full workspace feature reference.
+| Feature      | Default | Description |
+|--------------|---------|-------------|
+| `production` | off     | Excludes the stub `CryptoProvider`; required for release builds. A real `CryptoProvider` must be wired in or the crate fails to compile. |
+| `mock-hsm`   | off     | Enables the mock HSM for non-production builds. Mutually exclusive with `production`. |
+| `pqc`        | off     | Enables the real ML-KEM-768 / ML-DSA-65 post-quantum C ABI functions (`vs_pq_*`). |
+
+The default feature set is empty; select `mock-hsm` (development) or
+`production` (release) explicitly.
 
 ## License
 
