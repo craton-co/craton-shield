@@ -176,21 +176,32 @@ pub struct SystemCapabilities {
 impl SystemCapabilities {
     /// Validates that capability values are within acceptable bounds.
     ///
-    /// Numeric fields are only checked when their associated feature is
-    /// enabled (e.g. `crypto_key_length_bits` is only validated when
-    /// `has_cryptography` is `true`).
+    /// Numeric fields are only checked when an associated feature is enabled.
+    /// `crypto_key_length_bits` is validated whenever **any** crypto-consuming
+    /// feature is enabled (`has_cryptography`, `has_pki_certificates`, or
+    /// `has_symmetric_key_auth`) so that a key length scored by CR 1.9 /
+    /// CR 1.14 / CR 4.3 can never bypass bounds checking.
     ///
     /// # Errors
     ///
     /// Returns [`VsError::InvalidInput`] if any of the following hold:
-    /// - `crypto_key_length_bits` is 0 or exceeds 4096 (when crypto is enabled)
+    /// - `crypto_key_length_bits` is 0 or exceeds 4096 (when any of
+    ///   `has_cryptography`, `has_pki_certificates`, or
+    ///   `has_symmetric_key_auth` is enabled)
     /// - `password_min_length` exceeds 128
     /// - `max_failed_login_attempts` is 0 (when user auth is enabled)
     /// - `session_timeout_seconds` is 0 (when session lock is enabled)
     /// - `max_concurrent_sessions` is 0 (when session lock is enabled)
     #[must_use = "validation result must not be silently ignored"]
     pub fn validate(&self) -> Result<(), VsError> {
-        if self.has_cryptography
+        // `crypto_key_length_bits` feeds CR 1.9 (gated on `has_pki_certificates`),
+        // CR 1.14 (gated on `has_symmetric_key_auth`), and CR 4.3 (gated on
+        // `has_cryptography`). Bounds-check it whenever any of those features
+        // is enabled, otherwise a caller could earn SL-4 from an unvetted key
+        // length by leaving `has_cryptography = false`.
+        let crypto_key_used =
+            self.has_cryptography || self.has_pki_certificates || self.has_symmetric_key_auth;
+        if crypto_key_used
             && (self.crypto_key_length_bits == 0 || self.crypto_key_length_bits > 4096)
         {
             return Err(VsError::InvalidInput);
@@ -1852,6 +1863,40 @@ mod tests {
             SecurityLevel::Sl4,
             "Cr1_5 with PKI + SL-3 password + SL-4 crypto must reach SL-4"
         );
+    }
+
+    /// Regression: `crypto_key_length_bits` must be bounds-checked whenever a
+    /// crypto-consuming feature is enabled, not only when `has_cryptography`
+    /// is `true`. CR 1.9 / CR 1.14 score key strength gated on
+    /// `has_pki_certificates` / `has_symmetric_key_auth`, so a caller must not
+    /// be able to feed an unvetted key length through those flags.
+    #[test]
+    fn validate_rejects_unbounded_key_length_via_pki_or_symmetric_flags() {
+        // PKI on, crypto off, absurd key length -> must be rejected.
+        let mut caps = SystemCapabilities::default();
+        caps.has_pki_certificates = true;
+        caps.crypto_key_length_bits = 5000;
+        assert_eq!(
+            caps.validate(),
+            Err(VsError::InvalidInput),
+            "oversized key length must be rejected when has_pki_certificates is set"
+        );
+
+        // Symmetric-key auth on, crypto off, zero-bit key -> must be rejected.
+        let mut caps = SystemCapabilities::default();
+        caps.has_symmetric_key_auth = true;
+        caps.crypto_key_length_bits = 0;
+        assert_eq!(
+            caps.validate(),
+            Err(VsError::InvalidInput),
+            "zero-bit key must be rejected when has_symmetric_key_auth is set"
+        );
+
+        // PKI on with a valid key length must still pass.
+        let mut caps = SystemCapabilities::default();
+        caps.has_pki_certificates = true;
+        caps.crypto_key_length_bits = 256;
+        assert!(caps.validate().is_ok());
     }
 
     /// Cr1_7: when `has_user_authentication = false`, password strength must
