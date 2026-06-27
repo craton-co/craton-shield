@@ -111,6 +111,12 @@ pub struct SystemCapabilities {
     pub has_session_lock: bool,
     /// Session inactivity timeout in seconds.
     pub session_timeout_seconds: u32,
+    /// The system implements concurrent-session control (CR 2.7).
+    ///
+    /// Must be `true` for `max_concurrent_sessions` to be scored; a system
+    /// that does not implement this control earns no credit for CR 2.7 even
+    /// if `max_concurrent_sessions` happens to be set.
+    pub has_concurrent_session_control: bool,
     /// Maximum number of concurrent sessions per user.
     pub max_concurrent_sessions: u8,
     /// The system records auditable events.
@@ -811,8 +817,11 @@ fn evaluate_cr(cr: ComponentRequirement, caps: &SystemCapabilities) -> Option<Se
         }
 
         ComponentRequirement::Cr2_7 => {
-            // Concurrent session control (SL-3+)
-            if caps.max_concurrent_sessions == 0 {
+            // Concurrent session control (SL-3+). Credit is gated on an
+            // explicit "control implemented" flag — a bare session count
+            // must not award compliance for a system that does not implement
+            // the control at all.
+            if !caps.has_concurrent_session_control || caps.max_concurrent_sessions == 0 {
                 0
             } else if caps.max_concurrent_sessions == 1 {
                 4
@@ -994,6 +1003,7 @@ mod tests {
             has_authorization_enforcement: true,
             has_session_lock: true,
             session_timeout_seconds: 60,
+            has_concurrent_session_control: true,
             max_concurrent_sessions: 1,
             has_audit_logging: true,
             audit_log_capacity_entries: 100_000,
@@ -1286,6 +1296,7 @@ mod tests {
             has_authorization_enforcement: true,
             has_session_lock: true,
             session_timeout_seconds: 900,
+            has_concurrent_session_control: true,
             max_concurrent_sessions: 3,
             has_audit_logging: true,
             audit_log_capacity_entries: 1_000,
@@ -1425,6 +1436,8 @@ mod tests {
     #[test]
     fn test_concurrent_session_thresholds() {
         let mut caps = SystemCapabilities::default();
+        // CR 2.7 is gated on an explicit "control implemented" flag.
+        caps.has_concurrent_session_control = true;
 
         // 1 session -> SL-4
         caps.max_concurrent_sessions = 1;
@@ -1445,6 +1458,24 @@ mod tests {
         let cr27 = find_cr(&r, ComponentRequirement::Cr2_7);
         assert_eq!(cr27.achieved_sl, SecurityLevel::Sl1);
         assert_eq!(cr27.status, ComplianceStatus::PartiallyCompliant);
+    }
+
+    /// Regression: CR 2.7 must not award any credit when the system does not
+    /// implement concurrent-session control, even if `max_concurrent_sessions`
+    /// is set to a value that would otherwise score (e.g. 1 -> SL-4).
+    #[test]
+    fn cr2_7_no_credit_without_concurrent_session_control() {
+        let mut caps = SystemCapabilities::default();
+        caps.has_concurrent_session_control = false;
+        caps.max_concurrent_sessions = 1; // would map to SL-4 if gated only on the count
+
+        let r = run(&caps, SecurityLevel::Sl4);
+        let cr27 = find_cr(&r, ComponentRequirement::Cr2_7);
+        assert_eq!(
+            cr27.status,
+            ComplianceStatus::NonCompliant,
+            "CR 2.7 must be NonCompliant when concurrent-session control is absent"
+        );
     }
 
     #[test]
