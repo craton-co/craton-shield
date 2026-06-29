@@ -37,33 +37,39 @@ All other CRs from FR 1 through FR 7 (40 in total) are covered.
 
 ## Quick start
 
-```rust,ignore
+```rust
 use vs_report_iec62443::{assess, SecurityLevel, SystemCapabilities};
 
-// Describe the system under test
-let mut caps = SystemCapabilities::default();
-caps.has_user_authentication = true;
-caps.max_failed_login_attempts = 3;
-caps.has_authorization_enforcement = true;
-caps.has_cryptography = true;
-caps.crypto_key_length_bits = 256;
-caps.has_audit_logging = true;
-// ... populate remaining fields ...
+fn main() -> Result<(), vs_types::VsError> {
+    // Describe the system under test
+    let mut caps = SystemCapabilities::default();
+    caps.has_user_authentication = true;
+    caps.max_failed_login_attempts = 3;
+    caps.has_authorization_enforcement = true;
+    caps.has_cryptography = true;
+    caps.crypto_key_length_bits = 256;
+    caps.has_audit_logging = true;
 
-// Run the assessment against SL-2
-let evidence = assess(&caps, SecurityLevel::Sl2).unwrap();
-let report = evidence.payload();
+    // Run the assessment against SL-2
+    let evidence = assess(&caps, SecurityLevel::Sl2)?;
+    let report = evidence.payload();
 
-if report.is_compliant() {
-    // Target SL achieved
-} else {
-    // Inspect gaps
-    for gap in report.iter_gaps() {
-        // gap.requirement, gap.status, gap.achieved_sl ...
-        let _ = gap;
+    if report.is_compliant() {
+        // Target SL achieved
+    } else {
+        // Inspect gaps
+        for gap in report.iter_gaps() {
+            // gap.requirement, gap.status, gap.achieved_sl ...
+            let _ = gap;
+        }
     }
+    Ok(())
 }
 ```
+
+This mirrors the compiled rustdoc example on
+[`assess`](https://docs.rs/vs-report-iec62443); the rustdoc version is
+verified as a doctest on every build.
 
 ## License
 
