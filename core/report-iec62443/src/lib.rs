@@ -1762,7 +1762,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // v0.9 regressions: ghost rows, achieved_sl clamp, Cr1_5/7/11 auth gating
+    // 0.7.1 regressions: ghost rows, achieved_sl clamp, Cr1_5/7/11 auth gating
     // -----------------------------------------------------------------------
 
     /// `entries()` must NOT include the placeholder rows that fill the
