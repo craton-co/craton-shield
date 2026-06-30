@@ -1077,8 +1077,7 @@ impl LinuxCanBus {
                     frame.timestamp_us = ts;
                     frames[out] = frame;
                     out += 1;
-                }
-                else {
+                } else {
                     // Datagram is neither classic- nor FD-sized: it cannot
                     // be decoded into a frame. Count the drop so the caller
                     // can detect the loss via `dropped_frames()` rather than
