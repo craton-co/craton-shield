@@ -663,9 +663,11 @@ impl TestIndex {
 /// # Errors
 ///
 /// Returns [`VsError::InvalidInput`] if any count exceeds its maximum, if
-/// a requirement references a non-existent module, or if a test case
+/// a requirement references a non-existent module, if a test case
 /// references a `requirement_id` that does not appear in
-/// `input.requirements`.
+/// `input.requirements`, or if any module, requirement, or test-case `id`
+/// is duplicated within its collection (an ambiguous traceability matrix
+/// is rejected rather than silently mis-analysed).
 ///
 /// # Example
 ///
@@ -797,8 +799,17 @@ pub fn generate_traceability_report(
     Ok(report)
 }
 
-/// Validate that input counts are within bounds and all module references
-/// are valid.
+/// Validate that input counts are within bounds, all module references are
+/// valid, and every entity's `id` is unique within its collection.
+///
+/// Duplicate identifiers are rejected fail-closed: under IEC 62304 the
+/// traceability matrix must be unambiguous, and a duplicate requirement `id`
+/// in particular corrupts the inverted index built by [`TestIndex::build`]
+/// (binary search would map a test to an arbitrary one of the colliding
+/// requirements, leaving the other(s) with an empty bucket and a spurious
+/// compliance gap). Duplicate module and test-case ids are likewise rejected
+/// because their `id` fields are documented as unique and an ambiguous matrix
+/// must never be silently accepted in compliance evidence.
 fn validate_input(input: &TraceabilityInput) -> Result<(), VsError> {
     if input.module_count > MAX_MODULES
         || input.requirement_count > MAX_REQUIREMENTS
@@ -807,10 +818,44 @@ fn validate_input(input: &TraceabilityInput) -> Result<(), VsError> {
         return Err(VsError::InvalidInput);
     }
 
+    // Reject duplicate module ids.
+    let mut i = 0;
+    while i < input.module_count {
+        let mut j = i + 1;
+        while j < input.module_count {
+            if input.modules[i].id == input.modules[j].id {
+                return Err(VsError::InvalidInput);
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+
+    // Reject duplicate requirement ids and validate module references.
     let mut i = 0;
     while i < input.requirement_count {
         if !module_exists(input, input.requirements[i].module_id) {
             return Err(VsError::InvalidInput);
+        }
+        let mut j = i + 1;
+        while j < input.requirement_count {
+            if input.requirements[i].id == input.requirements[j].id {
+                return Err(VsError::InvalidInput);
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+
+    // Reject duplicate test-case ids.
+    let mut i = 0;
+    while i < input.test_case_count {
+        let mut j = i + 1;
+        while j < input.test_case_count {
+            if input.test_cases[i].id == input.test_cases[j].id {
+                return Err(VsError::InvalidInput);
+            }
+            j += 1;
         }
         i += 1;
     }
@@ -1326,6 +1371,61 @@ mod tests {
 
         input.requirements[0] = make_test_requirement(10, 99, SafetyClass::ClassA);
         input.requirement_count = 1;
+
+        let result = generate_traceability_report(&input);
+        assert_eq!(result, Err(VsError::InvalidInput));
+    }
+
+    // Duplicate requirement ids must be rejected: they would otherwise
+    // corrupt the inverted index (binary search maps every test to an
+    // arbitrary one of the colliding requirements, leaving the other with
+    // an empty bucket and a spurious compliance gap).
+    #[test]
+    fn duplicate_requirement_id_rejected() {
+        let mut input = empty_input();
+
+        input.modules[0] = make_test_module(1, SafetyClass::ClassA);
+        input.module_count = 1;
+
+        input.requirements[0] = make_test_requirement(10, 1, SafetyClass::ClassA);
+        input.requirements[1] = make_test_requirement(10, 1, SafetyClass::ClassA);
+        input.requirement_count = 2;
+
+        input.test_cases[0] = make_test_case(100, 10, VerificationMethod::UnitTest, true);
+        input.test_case_count = 1;
+
+        let result = generate_traceability_report(&input);
+        assert_eq!(result, Err(VsError::InvalidInput));
+    }
+
+    // Duplicate module ids make the traceability matrix ambiguous and are
+    // rejected fail-closed.
+    #[test]
+    fn duplicate_module_id_rejected() {
+        let mut input = empty_input();
+
+        input.modules[0] = make_test_module(1, SafetyClass::ClassA);
+        input.modules[1] = make_test_module(1, SafetyClass::ClassB);
+        input.module_count = 2;
+
+        let result = generate_traceability_report(&input);
+        assert_eq!(result, Err(VsError::InvalidInput));
+    }
+
+    // Duplicate test-case ids are rejected fail-closed.
+    #[test]
+    fn duplicate_test_case_id_rejected() {
+        let mut input = empty_input();
+
+        input.modules[0] = make_test_module(1, SafetyClass::ClassA);
+        input.module_count = 1;
+
+        input.requirements[0] = make_test_requirement(10, 1, SafetyClass::ClassA);
+        input.requirement_count = 1;
+
+        input.test_cases[0] = make_test_case(100, 10, VerificationMethod::UnitTest, true);
+        input.test_cases[1] = make_test_case(100, 10, VerificationMethod::IntegrationTest, true);
+        input.test_case_count = 2;
 
         let result = generate_traceability_report(&input);
         assert_eq!(result, Err(VsError::InvalidInput));
