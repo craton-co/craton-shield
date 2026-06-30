@@ -5233,7 +5233,7 @@ mod tests {
         // TCP header (20 bytes, data offset = 5 words).
         pkt[22..24].copy_from_slice(&dst_port.to_be_bytes());
         pkt[32] = 5 << 4; // data offset nibble
-        // DoIP payload at offset 40.
+                          // DoIP payload at offset 40.
         pkt[40..40 + doip.len()].copy_from_slice(doip);
         pkt
     }

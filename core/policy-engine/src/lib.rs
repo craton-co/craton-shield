@@ -1092,6 +1092,7 @@ impl PolicyEngine {
     /// derived from public data with no device-unique secret, so there is no
     /// secret to protect — a plain (non-constant-time) comparison is used.
     #[must_use = "rule-checksum verification result must not be silently ignored"]
+    #[allow(rustdoc::private_intra_doc_links)]
     pub fn verify_integrity(&self) -> bool {
         self.compute_checksum() == self.rule_checksum
     }

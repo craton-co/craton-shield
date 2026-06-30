@@ -122,7 +122,11 @@ impl EwmaDetector {
     /// [`Self::EWMA_VARIANCE_FLOOR_REL`]. Always finite and strictly
     /// positive.
     fn floored_variance(&self) -> f32 {
-        let mean_abs = if self.mean < 0.0 { -self.mean } else { self.mean };
+        let mean_abs = if self.mean < 0.0 {
+            -self.mean
+        } else {
+            self.mean
+        };
         let rel = Self::EWMA_VARIANCE_FLOOR_REL * mean_abs;
         let mut floor = rel * rel;
         if !floor.is_finite() || floor < Self::EWMA_VARIANCE_FLOOR_ABS {

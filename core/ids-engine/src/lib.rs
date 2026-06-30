@@ -255,8 +255,8 @@ impl DedupTable {
             // True iff `ideal` lies cyclically within `[next, hole]` going
             // backwards — i.e. moving the entry to `hole` does not place it
             // before its ideal bucket.
-            let movable = (next.wrapping_sub(ideal) & DEDUP_MASK)
-                >= (next.wrapping_sub(hole) & DEDUP_MASK);
+            let movable =
+                (next.wrapping_sub(ideal) & DEDUP_MASK) >= (next.wrapping_sub(hole) & DEDUP_MASK);
             if movable {
                 self.buckets[hole] = Some((k, s));
                 self.buckets[next] = None;
@@ -633,6 +633,7 @@ impl IdsEngine {
     /// produced. Callers always act on this composed severity because it is
     /// the value returned here and dispatched. Do not reorder these two
     /// calls: `record_alert` mutates the ring that `maybe_escalate` reads.
+    #[allow(rustdoc::private_intra_doc_links)]
     pub fn submit_can_frame(&mut self, frame: &CanFrame, ts_us: u64) -> Option<SecurityAlert> {
         let original_ts_us = ts_us;
         let (ts_us, clock_alert) = self.clamp_timestamp(ts_us);

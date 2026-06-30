@@ -1006,7 +1006,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                     // tamper-evident log could not record this denial.
                     // Surface the audit-log failure rather than the
                     // (less severe) policy violation.
-                    if self.route_alert(&alert, ts_us) == RouteOutcome::Dropped {
+                    if self.route_alert(&alert, ts_us) == RouteResult::Dropped {
                         return Err(VsError::StorageError);
                     }
                     return Err(VsError::PolicyViolation);
@@ -1026,7 +1026,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
             // Fail-closed: if the security alert could not be recorded
             // in the tamper-evident log, the submit must not silently
             // return Ok -- track the drop and surface it below.
-            if self.route_alert(a, ts_us) == RouteOutcome::Dropped {
+            if self.route_alert(a, ts_us) == RouteResult::Dropped {
                 alert_dropped = true;
             }
             let result = self.ids_engine.dispatch_and_respond(a);
@@ -1050,7 +1050,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                         payload_hash: PayloadHash::ZERO,
                         timestamp_us: ts_us,
                     };
-                    if self.route_alert(&anomaly_alert, ts_us) == RouteOutcome::Dropped {
+                    if self.route_alert(&anomaly_alert, ts_us) == RouteResult::Dropped {
                         alert_dropped = true;
                     }
                 }
@@ -1122,7 +1122,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                     };
                     // Fail-closed: a dropped audit alert means the
                     // tamper-evident log could not record this denial.
-                    if self.route_alert(&alert, ts_us) == RouteOutcome::Dropped {
+                    if self.route_alert(&alert, ts_us) == RouteResult::Dropped {
                         return Err(VsError::StorageError);
                     }
                     return Err(VsError::PolicyViolation);
@@ -1141,7 +1141,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
         if let Some(ref a) = alert {
             // Fail-closed: a dropped security alert must not be masked
             // by an Ok return -- track the drop and surface it below.
-            if self.route_alert(a, ts_us) == RouteOutcome::Dropped {
+            if self.route_alert(a, ts_us) == RouteResult::Dropped {
                 alert_dropped = true;
             }
             let result = self.ids_engine.dispatch_and_respond(a);
@@ -1181,7 +1181,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                     };
                     // Fail-closed: a dropped audit alert means the
                     // firewall drop could not be recorded.
-                    if self.route_alert(&drop_alert, ts_us) == RouteOutcome::Dropped {
+                    if self.route_alert(&drop_alert, ts_us) == RouteResult::Dropped {
                         return Err(VsError::StorageError);
                     }
                     return Err(VsError::PolicyViolation);
@@ -1215,7 +1215,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                         payload_hash: PayloadHash::ZERO,
                         timestamp_us: ts_us,
                     };
-                    if self.route_alert(&anomaly_alert, ts_us) == RouteOutcome::Dropped {
+                    if self.route_alert(&anomaly_alert, ts_us) == RouteResult::Dropped {
                         alert_dropped = true;
                     }
                 }
@@ -1611,7 +1611,7 @@ impl<C: CryptoProvider + Clone, PQ: PostQuantumProvider> CratonShield<C, PQ> {
                     payload_hash: PayloadHash::ZERO,
                     timestamp_us: ts_us,
                 };
-                if self.route_alert(&alert, ts_us) == RouteOutcome::Dropped {
+                if self.route_alert(&alert, ts_us) == RouteResult::Dropped {
                     alert_dropped = true;
                 }
             }
