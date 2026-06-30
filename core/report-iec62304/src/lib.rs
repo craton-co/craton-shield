@@ -300,6 +300,12 @@ pub struct TraceabilityReport {
 
 impl TraceabilityReport {
     /// Returns `true` if there are no compliance gaps and all tests pass.
+    ///
+    /// A `true` result is consistent with [`Self::coverage_percent`]:
+    /// because a requirement whose safety class mandates no verification
+    /// methods (Class A) is classified [`TraceStatus::FullyCovered`] rather
+    /// than [`TraceStatus::NotCovered`], a compliant report can no longer
+    /// report a coverage percentage below 100. The two metrics agree.
     #[must_use]
     pub const fn is_compliant(&self) -> bool {
         self.gap_count == 0 && self.all_tests_passing && !self.gaps_truncated
@@ -308,6 +314,11 @@ impl TraceabilityReport {
     /// Percentage of requirements that are fully covered (0--100).
     ///
     /// Returns 0 when there are no requirements.
+    ///
+    /// A requirement whose safety class mandates no verification methods
+    /// (Class A) counts as fully covered: it has nothing left to verify.
+    /// Consequently a [`Self::is_compliant`] report always reports 100 here,
+    /// and the two metrics never contradict one another.
     #[must_use]
     pub const fn coverage_percent(&self) -> u8 {
         if self.total_requirements == 0 {
@@ -973,23 +984,40 @@ fn process_requirement(
         cursor = index.tc_next[ti];
     }
 
-    // Determine coverage status. A requirement with only failing tests is
-    // classified `NotCovered` (failing tests are not IEC 62304 evidence).
-    if passing_count == 0 {
+    // Determine coverage status.
+    //
+    // A requirement is `FullyCovered` when every verification method its
+    // safety class mandates is satisfied by a passing test. This holds
+    // *vacuously* for a safety class that mandates no methods (Class A):
+    // such a requirement has nothing left to verify, so it is fully covered
+    // regardless of how many tests are linked.
+    //
+    // This vacuous case must NOT be short-circuited to `NotCovered` when
+    // `passing_count == 0`: doing so depressed `coverage_percent()` to 0 for
+    // an all-Class-A report while `is_compliant()` still returned `true`
+    // (no gaps, all tests pass), producing a self-contradictory compliance
+    // artifact. Classifying a no-mandate requirement as `FullyCovered`
+    // keeps the two metrics consistent.
+    //
+    // A requirement that *does* mandate methods but has only failing tests
+    // (or none) is still `NotCovered`, since failing tests are not IEC 62304
+    // verification evidence.
+    let all_methods_present = (!req.safety_class.requires_unit_testing() || has_unit)
+        && (!req.safety_class.requires_integration_testing() || has_integration)
+        && (!req.safety_class.requires_static_analysis() || has_static);
+    let mandates_no_methods = !req.safety_class.requires_unit_testing()
+        && !req.safety_class.requires_integration_testing()
+        && !req.safety_class.requires_static_analysis();
+
+    if passing_count == 0 && !mandates_no_methods {
         link.status = TraceStatus::NotCovered;
         report.not_covered += 1;
+    } else if all_methods_present {
+        link.status = TraceStatus::FullyCovered;
+        report.fully_covered += 1;
     } else {
-        let all_methods_present = (!req.safety_class.requires_unit_testing() || has_unit)
-            && (!req.safety_class.requires_integration_testing() || has_integration)
-            && (!req.safety_class.requires_static_analysis() || has_static);
-
-        if all_methods_present {
-            link.status = TraceStatus::FullyCovered;
-            report.fully_covered += 1;
-        } else {
-            link.status = TraceStatus::PartiallyCovered;
-            report.partially_covered += 1;
-        }
+        link.status = TraceStatus::PartiallyCovered;
+        report.partially_covered += 1;
     }
 
     report.traces[report.trace_count] = link;
@@ -1186,7 +1214,9 @@ mod tests {
         assert!(!report.is_compliant());
     }
 
-    // 4. Class A with no tests gives NotCovered but no gap.
+    // 4. Class A with no tests is fully covered (it mandates no
+    // verification methods) and produces no gap. This keeps
+    // `coverage_percent()` consistent with `is_compliant()`.
     #[test]
     fn class_a_no_tests_no_gap() {
         let mut input = empty_input();
@@ -1199,9 +1229,12 @@ mod tests {
 
         let report = report_of(&input);
 
-        assert_eq!(report.not_covered(), 1);
+        assert_eq!(report.not_covered(), 0);
+        assert_eq!(report.fully_covered(), 1);
+        assert_eq!(report.entries()[0].status, TraceStatus::FullyCovered);
         assert_eq!(report.gap_count(), 0);
         assert!(report.is_compliant());
+        assert_eq!(report.coverage_percent(), 100);
     }
 
     // 5. Class C requirement missing static analysis produces gap.
@@ -1533,34 +1566,41 @@ mod tests {
         assert_eq!(report.coverage_percent(), 100);
     }
 
+    // Genuine 0% coverage: requirements that mandate verification methods
+    // (Class C) but have no tests at all. (Class A requirements, which
+    // mandate nothing, are vacuously fully covered and would report 100%.)
     #[test]
     fn test_coverage_percent_0() {
         let mut input = empty_input();
 
-        input.modules[0] = make_test_module(1, SafetyClass::ClassA);
+        input.modules[0] = make_test_module(1, SafetyClass::ClassC);
         input.module_count = 1;
 
-        input.requirements[0] = make_test_requirement(10, 1, SafetyClass::ClassA);
-        input.requirements[1] = make_test_requirement(11, 1, SafetyClass::ClassA);
+        input.requirements[0] = make_test_requirement(10, 1, SafetyClass::ClassC);
+        input.requirements[1] = make_test_requirement(11, 1, SafetyClass::ClassC);
         input.requirement_count = 2;
 
         let report = report_of(&input);
         assert_eq!(report.coverage_percent(), 0);
     }
 
+    // Genuine 50% coverage: two Class C requirements, only one of which is
+    // fully verified.
     #[test]
     fn test_coverage_percent_partial() {
         let mut input = empty_input();
 
-        input.modules[0] = make_test_module(1, SafetyClass::ClassA);
+        input.modules[0] = make_test_module(1, SafetyClass::ClassC);
         input.module_count = 1;
 
-        input.requirements[0] = make_test_requirement(10, 1, SafetyClass::ClassA);
-        input.requirements[1] = make_test_requirement(11, 1, SafetyClass::ClassA);
+        input.requirements[0] = make_test_requirement(10, 1, SafetyClass::ClassC);
+        input.requirements[1] = make_test_requirement(11, 1, SafetyClass::ClassC);
         input.requirement_count = 2;
 
         input.test_cases[0] = make_test_case(100, 10, VerificationMethod::UnitTest, true);
-        input.test_case_count = 1;
+        input.test_cases[1] = make_test_case(101, 10, VerificationMethod::IntegrationTest, true);
+        input.test_cases[2] = make_test_case(102, 10, VerificationMethod::StaticAnalysis, true);
+        input.test_case_count = 3;
 
         let report = report_of(&input);
         assert_eq!(report.coverage_percent(), 50);
@@ -1974,22 +2014,26 @@ mod tests {
         assert_eq!(result, Err(VsError::InvalidInput));
     }
 
-    /// A requirement whose only linked test failed must be classified
-    /// `NotCovered`, not `FullyCovered` or `PartiallyCovered`. This guards
-    /// the IEC-62304 "passing tests = evidence" semantic — failing tests
-    /// are not verification evidence and must not satisfy the safety class.
+    /// A requirement that mandates a verification method but whose only
+    /// linked test failed must be classified `NotCovered`, not
+    /// `FullyCovered` or `PartiallyCovered`. This guards the IEC-62304
+    /// "passing tests = evidence" semantic — failing tests are not
+    /// verification evidence and must not satisfy the safety class. A class
+    /// that mandates a method (Class B) is used so the failing test is the
+    /// difference between covered and not-covered.
     #[test]
     fn failing_only_test_yields_not_covered() {
         let mut input = empty_input();
 
-        input.modules[0] = make_test_module(1, SafetyClass::ClassA);
+        input.modules[0] = make_test_module(1, SafetyClass::ClassB);
         input.module_count = 1;
 
-        input.requirements[0] = make_test_requirement(10, 1, SafetyClass::ClassA);
+        input.requirements[0] = make_test_requirement(10, 1, SafetyClass::ClassB);
         input.requirement_count = 1;
 
         input.test_cases[0] = make_test_case(100, 10, VerificationMethod::UnitTest, false);
-        input.test_case_count = 1;
+        input.test_cases[1] = make_test_case(101, 10, VerificationMethod::IntegrationTest, false);
+        input.test_case_count = 2;
 
         let report = report_of(&input);
         assert_eq!(report.not_covered(), 1);
