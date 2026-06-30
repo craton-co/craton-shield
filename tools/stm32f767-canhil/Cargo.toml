@@ -1,0 +1,33 @@
+# Tier 2: real CAN hardware-in-the-loop for the NUCLEO-F767ZI.
+#
+# Implements vs_hal::CanBus for an MCP2515 + TJA1050 module over SPI, so real
+# CAN frames from a second on-bus node flow into the certified vs-can-monitor
+# IDS running on the Cortex-M7. Standalone package (own [workspace]).
+[package]
+name = "stm32f767-canhil"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+stm32f7xx-hal = { version = "0.8.0", features = ["stm32f767", "rt"] }
+embedded-hal = "0.2"
+nb = "1"
+
+# Crates under test / implemented against.
+vs-hal = { path = "../../core/hal" }
+vs-types = { path = "../../core/types" }
+vs-can-monitor = { path = "../../core/can-monitor" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = true
+panic = "abort"
