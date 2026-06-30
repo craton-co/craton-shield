@@ -1,0 +1,29 @@
+# Standalone hardware-in-the-loop test harness for the Modbus RTU monitor.
+#
+# This crate is intentionally NOT a member of the root workspace: it is a `std`
+# binary that drives a physical USB-RS485 adapter, whereas the workspace enforces
+# `#![no_std]` + deny-all clippy on certified crates. It declares its own empty
+# `[workspace]` table so `cargo` treats it as an independent package while still
+# resolving the monitor crates through relative path dependencies.
+[package]
+name = "modbus-rs485-harness"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Physical RS485 / Modbus RTU test bench for vs-modbus-monitor-ind"
+
+[workspace]
+
+[dependencies]
+serialport = "4.6"
+vs-types-ind = { path = "../../industrial/types-ind" }
+vs-modbus-monitor-ind = { path = "../../industrial/modbus-monitor-ind" }
+
+[[bin]]
+name = "vs-modbus-monitor"
+path = "src/bin/monitor.rs"
+
+[[bin]]
+name = "vs-modbus-replay"
+path = "src/bin/replay.rs"
