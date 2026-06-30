@@ -1,0 +1,38 @@
+# On-target self-test + WCET firmware for the NUCLEO-F767ZI.
+#
+# Cross-compiles the REAL certified IDS crates (vs-can-monitor,
+# vs-modbus-monitor-ind) to the Cortex-M7 and measures cycle-accurate WCET on
+# silicon using the DWT cycle counter. Results are printed over USART3, which
+# the Nucleo's onboard ST-LINK exposes as a USB virtual COM port.
+#
+# Standalone package (own [workspace]) so it can target thumbv7em with a
+# bare-metal panic strategy without disturbing the certified workspace.
+[package]
+name = "stm32f767-selftest"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+stm32f7xx-hal = { version = "0.8.0", features = ["stm32f767", "rt"] }
+embedded-hal = "0.2"
+nb = "1"
+
+# Crates under test — the real production IDS logic.
+vs-types = { path = "../../core/types" }
+vs-can-monitor = { path = "../../core/can-monitor" }
+vs-types-ind = { path = "../../industrial/types-ind" }
+vs-modbus-monitor-ind = { path = "../../industrial/modbus-monitor-ind" }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = true        # keep symbols for debugging; stripped from the .bin anyway
+panic = "abort"
