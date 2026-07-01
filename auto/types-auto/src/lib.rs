@@ -43,13 +43,16 @@ pub use vs_types::*;
 /// If a non-automotive Ethernet source type is added to core in the future,
 /// this alias should be replaced with a distinct value.
 pub const SOURCE_AUTOMOTIVE_ETHERNET: u8 = vs_types::SOURCE_ETHERNET;
-/// LIN bus (automotive-extended constant; shadows [`vs_types::SOURCE_LIN`]
-/// with a domain-local value used by automotive FFI consumers).
-pub const SOURCE_LIN: u8 = 10;
-/// `FlexRay` bus (automotive-extended constant; shadows
-/// [`vs_types::SOURCE_FLEXRAY`] with a domain-local value used by automotive
-/// FFI consumers).
-pub const SOURCE_FLEXRAY: u8 = 11;
+// NOTE: `SOURCE_LIN` and `SOURCE_FLEXRAY` are intentionally NOT redefined
+// here. They are re-exported unchanged from `vs_types` (`SOURCE_LIN = 5`,
+// `SOURCE_FLEXRAY = 6`) so that this crate and the core layer agree on the
+// wire value of a bus. A previous version of this crate redefined them with
+// divergent values (10/11), which (a) collided with the `pub use vs_types::*`
+// glob re-export above — breaking any downstream `use vs_types_auto::*;` —
+// and (b) caused cross-layer alert correlation to silently fail, because a
+// `SecurityAlert.source_type` set by a core monitor (5/6) was rejected by
+// this crate's `BusType::try_from`. The core constants are the single source
+// of truth for bus source types.
 
 // ---------------------------------------------------------------------------
 // Reserved source IDs (bus-independent)
@@ -95,8 +98,8 @@ impl BusType {
             Self::Can => vs_types::SOURCE_CAN,
             Self::CanFd => vs_types::SOURCE_CAN_FD,
             Self::AutomotiveEthernet => SOURCE_AUTOMOTIVE_ETHERNET,
-            Self::Lin => SOURCE_LIN,
-            Self::FlexRay => SOURCE_FLEXRAY,
+            Self::Lin => vs_types::SOURCE_LIN,
+            Self::FlexRay => vs_types::SOURCE_FLEXRAY,
         }
     }
 }
@@ -112,8 +115,8 @@ impl TryFrom<u8> for BusType {
             x if x == vs_types::SOURCE_CAN => Ok(Self::Can),
             x if x == vs_types::SOURCE_CAN_FD => Ok(Self::CanFd),
             x if x == SOURCE_AUTOMOTIVE_ETHERNET => Ok(Self::AutomotiveEthernet),
-            x if x == SOURCE_LIN => Ok(Self::Lin),
-            x if x == SOURCE_FLEXRAY => Ok(Self::FlexRay),
+            x if x == vs_types::SOURCE_LIN => Ok(Self::Lin),
+            x if x == vs_types::SOURCE_FLEXRAY => Ok(Self::FlexRay),
             _ => Err(vs_types::VsError::InvalidInput),
         }
     }
@@ -405,6 +408,45 @@ mod tests {
         // 255 is not a valid source type.
         let result = BusType::try_from(255u8);
         assert_eq!(result, Err(VsError::InvalidInput));
+    }
+
+    #[test]
+    fn source_constants_match_core() {
+        // Regression test for the constant-divergence hazard: this crate must
+        // NOT redefine SOURCE_LIN / SOURCE_FLEXRAY with values that disagree
+        // with the core layer. They are re-exported unchanged from vs_types so
+        // cross-layer alert correlation stays consistent. If these ever
+        // diverge, alert correlation silently breaks — fail loudly here.
+        assert_eq!(SOURCE_LIN, vs_types::SOURCE_LIN);
+        assert_eq!(SOURCE_FLEXRAY, vs_types::SOURCE_FLEXRAY);
+        assert_eq!(SOURCE_AUTOMOTIVE_ETHERNET, vs_types::SOURCE_ETHERNET);
+    }
+
+    #[test]
+    fn bus_type_try_from_core_source_values() {
+        // A source_type set by a core-layer monitor (SOURCE_LIN = 5,
+        // SOURCE_FLEXRAY = 6) MUST round-trip through this crate's BusType.
+        // Previously these values were rejected because the crate used 10/11.
+        assert_eq!(BusType::try_from(vs_types::SOURCE_LIN), Ok(BusType::Lin));
+        assert_eq!(
+            BusType::try_from(vs_types::SOURCE_FLEXRAY),
+            Ok(BusType::FlexRay)
+        );
+    }
+
+    #[test]
+    fn bus_type_agrees_with_core_bus_type() {
+        // This crate's BusType and vs_types::BusType must map the same bus to
+        // the same source_type, so a SecurityAlert is interpreted identically
+        // regardless of which layer produced it.
+        assert_eq!(
+            BusType::Lin.to_source_type(),
+            vs_types::BusType::Lin.to_source_type()
+        );
+        assert_eq!(
+            BusType::FlexRay.to_source_type(),
+            vs_types::BusType::FlexRay.to_source_type()
+        );
     }
 
     // --- Hash derive (compile-time check only) ---
