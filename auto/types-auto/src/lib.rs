@@ -17,16 +17,16 @@
 //! * VIN helpers ([`validate_check_digit`], [`try_from_normalized`]) that
 //!   operate on the *core* [`vs_types::VehicleId`] — there is no separate
 //!   `VehicleId` type in this crate. Re-introducing one would silently shadow
-//!   the redacted core type and is forbidden by policy (see CHANGELOG /
-//!   regression test in `vs-types`).
+//!   the redacted core type and is forbidden by policy; the `vs-types` crate
+//!   carries a regression test pinning the redaction behaviour.
 
 // ---------------------------------------------------------------------------
 // Public API (v1.0 stable)
 // ---------------------------------------------------------------------------
 //
 // Every `pub` item below is part of the v1.0 stable surface and governed
-// by `DEPRECATION.md`. `BusType` discriminants are pinned and form part of
-// the stable ABI for automotive FFI consumers.
+// by the workspace deprecation policy. `BusType` discriminants are pinned
+// and form part of the stable ABI for automotive FFI consumers.
 
 // Re-export everything from the core types crate. This brings in the
 // PII-redacting `vs_types::VehicleId` — DO NOT shadow it with a local type.
