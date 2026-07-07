@@ -1796,7 +1796,7 @@ impl DemManager {
                 }
             }
             DemEventStatus::Prefailed => {
-                state.debounce_counter = (state.debounce_counter + 1).min(3);
+                state.debounce_counter = state.debounce_counter.saturating_add(1).min(3);
                 state.fail_counter = state.fail_counter.saturating_add(1);
                 state.pass_counter = 0;
                 state.last_failed_us = ts_us;
@@ -1820,7 +1820,7 @@ impl DemManager {
                 }
             }
             DemEventStatus::Prepassed => {
-                state.debounce_counter = (state.debounce_counter - 1).max(-3);
+                state.debounce_counter = state.debounce_counter.saturating_sub(1).max(-3);
                 state.pass_counter = state.pass_counter.saturating_add(1);
                 state.fail_counter = 0;
                 state.last_passed_us = ts_us;
