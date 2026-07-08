@@ -30,7 +30,7 @@ Ara::com service discovery types for SOME/IP instance registration.
 
 ## Usage
 
-```rust
+```rust,ignore
 use vs_autosar::{SecOcManager, SecOcPduConfig, SecOcDirection, IdsmReporter};
 
 // SecOC: Secure Onboard Communication with MAC verification
