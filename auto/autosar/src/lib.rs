@@ -11,7 +11,7 @@
 //!
 //! # Public API
 //!
-//! Pre-1.0 (workspace version 0.7.0); see ROADMAP for 1.0 stability
+//! Pre-1.0 (workspace-inherited version); see ROADMAP for 1.0 stability
 //! commitment. The `SecOc`, `IdsM`, `Dem`, `BswM`, `ComM`, and `AraCom`
 //! types and their associated traits (`McalCanDriver`, `McalEthernetDriver`,
 //! `SomeIpAuthProvider`) form the public surface and are governed by
