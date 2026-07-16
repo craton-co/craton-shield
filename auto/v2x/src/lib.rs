@@ -1043,20 +1043,31 @@ impl<C: CryptoProvider> V2xValidator<C> {
     #[cfg(not(feature = "stub"))]
     #[allow(clippy::cast_possible_truncation, clippy::items_after_statements)]
     fn compute_digest(&self, msg: &V2xMessage) -> Result<[u8; 32], VsError> {
-        // Build a single contiguous buffer: header fields || payload data.
+        // Build a single contiguous buffer:
+        //   signer public key || header fields || payload data.
         // This avoids the previous XOR-of-two-hashes approach which was not
         // collision-resistant.
         //
+        // The 65-byte uncompressed `signer_public_key` is hashed first so
+        // the signed digest binds the signature to its signing key. IEEE
+        // 1609.2 SPDUs hash the signer/cert identity into `HashedData` for
+        // exactly this reason: without it, an ECDSA signature is a proof
+        // over the payload alone, not over "the payload as sent by this
+        // key", which permits signature stripping/substitution and
+        // cross-protocol confusion. The `validate` path has no certificate
+        // chain to otherwise tie the key in, so the binding must live here.
+        //
         // **Known limitation (P6):** The current CryptoProvider trait only
         // exposes a single-shot `sha256(data, out)` method, so we must
-        // copy the full header + payload into a contiguous stack buffer
-        // before hashing. For large payloads this means an extra memcpy.
+        // copy the full key + header + payload into a contiguous stack
+        // buffer before hashing. For large payloads this means an extra
+        // memcpy.
         //
-        // **Known v0.8 perf item:** Allocates a 536-byte stack buffer +
+        // **Known v0.8 perf item:** Allocates a 601-byte stack buffer +
         // memcpy of payload. v0.8: switch to streaming
         // `Sha256Stream::update/finish` once vs-crypto adds a streaming
         // trait (e.g. `Sha256Stream { update(&[u8]), finish(&mut
-        // [u8;32]) }`) so header and payload can be hashed separately
+        // [u8;32]) }`) so key, header and payload can be hashed separately
         // without the intermediate copy.
         let data_len = msg.payload.data_len as usize;
         let clamped_len = if data_len > MAX_PAYLOAD_LEN {
@@ -1065,21 +1076,27 @@ impl<C: CryptoProvider> V2xValidator<C> {
             data_len
         };
 
-        // Header: 24 bytes fixed fields.
-        // Total buffer: 24 + clamped_len (max 24 + 512 = 536).
+        // Layout: 65-byte signer public key || 24-byte header || payload.
+        // Total buffer: 65 + 24 + clamped_len (max 65 + 24 + 512 = 601).
+        const KEY_LEN: usize = 65;
         const HEADER_LEN: usize = 24;
-        let total_len = HEADER_LEN + clamped_len;
-        let mut buf = [0u8; HEADER_LEN + MAX_PAYLOAD_LEN];
+        const PREFIX_LEN: usize = KEY_LEN + HEADER_LEN;
+        let total_len = PREFIX_LEN + clamped_len;
+        let mut buf = [0u8; PREFIX_LEN + MAX_PAYLOAD_LEN];
 
-        buf[0..8].copy_from_slice(&msg.generation_time_us.to_le_bytes());
-        buf[8..12].copy_from_slice(&msg.payload.latitude_udeg.to_le_bytes());
-        buf[12..16].copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
-        buf[16..20].copy_from_slice(&msg.payload.speed_cm_s.to_le_bytes());
-        buf[20..22].copy_from_slice(&msg.payload.heading_cdeg.to_le_bytes());
-        buf[22..24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
+        // Bind the signer public key into the digest.
+        buf[0..KEY_LEN].copy_from_slice(&msg.signer_public_key);
+
+        buf[KEY_LEN..KEY_LEN + 8].copy_from_slice(&msg.generation_time_us.to_le_bytes());
+        buf[KEY_LEN + 8..KEY_LEN + 12].copy_from_slice(&msg.payload.latitude_udeg.to_le_bytes());
+        buf[KEY_LEN + 12..KEY_LEN + 16]
+            .copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
+        buf[KEY_LEN + 16..KEY_LEN + 20].copy_from_slice(&msg.payload.speed_cm_s.to_le_bytes());
+        buf[KEY_LEN + 20..KEY_LEN + 22].copy_from_slice(&msg.payload.heading_cdeg.to_le_bytes());
+        buf[KEY_LEN + 22..KEY_LEN + 24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
 
         if clamped_len > 0 {
-            buf[HEADER_LEN..total_len].copy_from_slice(&msg.payload.data[..clamped_len]);
+            buf[PREFIX_LEN..total_len].copy_from_slice(&msg.payload.data[..clamped_len]);
         }
 
         let mut digest = [0u8; 32];
@@ -2278,34 +2295,49 @@ mod tests {
         }
     }
 
-    fn make_signed_message(crypto: &TestCrypto) -> V2xMessage {
-        let msg = make_test_message();
+    /// Compute the per-message digest the same way `compute_digest` does:
+    /// signer public key || header fields || payload data. Keeping this in
+    /// one place ensures tests stay in lock-step with the production digest
+    /// layout (which binds `signer_public_key` per finding H1).
+    fn test_digest(crypto: &TestCrypto, msg: &V2xMessage) -> [u8; 32] {
+        const KEY_LEN: usize = 65;
+        const HEADER_LEN: usize = 24;
+        const PREFIX_LEN: usize = KEY_LEN + HEADER_LEN;
         let data_len = msg.payload.data_len as usize;
         let clamped_len = if data_len > MAX_PAYLOAD_LEN {
             MAX_PAYLOAD_LEN
         } else {
             data_len
         };
-        let header_len = 24;
-        let total_len = header_len + clamped_len;
-        let mut buf = [0u8; 24 + MAX_PAYLOAD_LEN];
-        buf[0..8].copy_from_slice(&msg.generation_time_us.to_le_bytes());
-        buf[8..12].copy_from_slice(&msg.payload.latitude_udeg.to_le_bytes());
-        buf[12..16].copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
-        buf[16..20].copy_from_slice(&msg.payload.speed_cm_s.to_le_bytes());
-        buf[20..22].copy_from_slice(&msg.payload.heading_cdeg.to_le_bytes());
-        buf[22..24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
+        let total_len = PREFIX_LEN + clamped_len;
+        let mut buf = [0u8; PREFIX_LEN + MAX_PAYLOAD_LEN];
+        buf[0..KEY_LEN].copy_from_slice(&msg.signer_public_key);
+        buf[KEY_LEN..KEY_LEN + 8].copy_from_slice(&msg.generation_time_us.to_le_bytes());
+        buf[KEY_LEN + 8..KEY_LEN + 12].copy_from_slice(&msg.payload.latitude_udeg.to_le_bytes());
+        buf[KEY_LEN + 12..KEY_LEN + 16]
+            .copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
+        buf[KEY_LEN + 16..KEY_LEN + 20].copy_from_slice(&msg.payload.speed_cm_s.to_le_bytes());
+        buf[KEY_LEN + 20..KEY_LEN + 22].copy_from_slice(&msg.payload.heading_cdeg.to_le_bytes());
+        buf[KEY_LEN + 22..KEY_LEN + 24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
         if clamped_len > 0 {
-            buf[header_len..total_len].copy_from_slice(&msg.payload.data[..clamped_len]);
+            buf[PREFIX_LEN..total_len].copy_from_slice(&msg.payload.data[..clamped_len]);
         }
-
         let mut digest = [0u8; 32];
         crypto.sha256(&buf[..total_len], &mut digest).unwrap();
+        digest
+    }
 
-        let mut signed = msg;
+    /// Re-sign `msg` in place against the current digest layout.
+    fn test_sign(crypto: &TestCrypto, msg: &mut V2xMessage) {
+        let digest = test_digest(crypto, msg);
         for i in 0..64 {
-            signed.signature[i] = digest[i % 32] ^ signed.signer_public_key[1 + (i % 32)];
+            msg.signature[i] = digest[i % 32] ^ msg.signer_public_key[1 + (i % 32)];
         }
+    }
+
+    fn make_signed_message(crypto: &TestCrypto) -> V2xMessage {
+        let mut signed = make_test_message();
+        test_sign(crypto, &mut signed);
         signed
     }
 
@@ -2318,6 +2350,41 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(validator.validated_count(), 1);
         assert_eq!(validator.rejected_count(), 0);
+    }
+
+    #[test]
+    #[cfg(not(feature = "stub"))]
+    fn digest_binds_signer_public_key() {
+        // Regression test for H1: two messages with identical payloads but
+        // different `signer_public_key` must produce different digests, so
+        // a signature cannot be stripped from one key and replayed under
+        // another.
+        let crypto = TestCrypto;
+        let msg_a = make_test_message();
+        let mut msg_b = make_test_message();
+        msg_b.signer_public_key[1] ^= 0xFF; // distinct signing key
+
+        let validator = V2xValidator::new(crypto);
+        let digest_a = validator.compute_digest(&msg_a).unwrap();
+        let digest_b = validator.compute_digest(&msg_b).unwrap();
+        assert_ne!(
+            digest_a, digest_b,
+            "digest must change when only the signer public key changes"
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "stub"))]
+    fn signature_not_transferable_across_keys() {
+        // A message signed for one key must be rejected if its
+        // `signer_public_key` is swapped for a different key.
+        let crypto = TestCrypto;
+        let mut validator = V2xValidator::new(crypto).with_permissive_psid();
+        let mut msg = make_signed_message(&validator.crypto);
+        // Swap in a different signer key without re-signing.
+        msg.signer_public_key[1] ^= 0xFF;
+        let result = validator.validate(&msg, 1_000_000);
+        assert_eq!(result, Err(VsError::AuthenticationFailure));
     }
 
     #[test]
@@ -2963,32 +3030,7 @@ mod tests {
             msg.payload.data_len = 1;
             msg.generation_time_us = current_time;
             // Recompute signature for the modified payload.
-            let data_len = msg.payload.data_len as usize;
-            let clamped_len = if data_len > MAX_PAYLOAD_LEN {
-                MAX_PAYLOAD_LEN
-            } else {
-                data_len
-            };
-            let header_len = 24;
-            let total_len = header_len + clamped_len;
-            let mut buf = [0u8; 24 + MAX_PAYLOAD_LEN];
-            buf[0..8].copy_from_slice(&msg.generation_time_us.to_le_bytes());
-            buf[8..12].copy_from_slice(&msg.payload.latitude_udeg.to_le_bytes());
-            buf[12..16].copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
-            buf[16..20].copy_from_slice(&msg.payload.speed_cm_s.to_le_bytes());
-            buf[20..22].copy_from_slice(&msg.payload.heading_cdeg.to_le_bytes());
-            buf[22..24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
-            if clamped_len > 0 {
-                buf[header_len..total_len].copy_from_slice(&msg.payload.data[..clamped_len]);
-            }
-            let mut digest = [0u8; 32];
-            validator
-                .crypto
-                .sha256(&buf[..total_len], &mut digest)
-                .unwrap();
-            for j in 0..64 {
-                msg.signature[j] = digest[j % 32] ^ msg.signer_public_key[1 + (j % 32)];
-            }
+            test_sign(&validator.crypto, &mut msg);
             let result = validator.validate(&msg, current_time);
             // Should pass (rate limit not yet exhausted).
             assert!(result.is_ok(), "message {i} should pass but got {result:?}");
@@ -3000,34 +3042,7 @@ mod tests {
         msg6.payload.data[0] = 0xFF;
         msg6.payload.data_len = 1;
         msg6.generation_time_us = 1_125_000;
-        {
-            let data_len = msg6.payload.data_len as usize;
-            let clamped_len = if data_len > MAX_PAYLOAD_LEN {
-                MAX_PAYLOAD_LEN
-            } else {
-                data_len
-            };
-            let header_len = 24;
-            let total_len = header_len + clamped_len;
-            let mut buf = [0u8; 24 + MAX_PAYLOAD_LEN];
-            buf[0..8].copy_from_slice(&msg6.generation_time_us.to_le_bytes());
-            buf[8..12].copy_from_slice(&msg6.payload.latitude_udeg.to_le_bytes());
-            buf[12..16].copy_from_slice(&msg6.payload.longitude_udeg.to_le_bytes());
-            buf[16..20].copy_from_slice(&msg6.payload.speed_cm_s.to_le_bytes());
-            buf[20..22].copy_from_slice(&msg6.payload.heading_cdeg.to_le_bytes());
-            buf[22..24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
-            if clamped_len > 0 {
-                buf[header_len..total_len].copy_from_slice(&msg6.payload.data[..clamped_len]);
-            }
-            let mut digest = [0u8; 32];
-            validator
-                .crypto
-                .sha256(&buf[..total_len], &mut digest)
-                .unwrap();
-            for j in 0..64 {
-                msg6.signature[j] = digest[j % 32] ^ msg6.signer_public_key[1 + (j % 32)];
-            }
-        }
+        test_sign(&validator.crypto, &mut msg6);
         let result6 = validator.validate(&msg6, 1_125_000);
         assert_eq!(result6, Err(VsError::ResourceExhausted));
 
@@ -3036,34 +3051,7 @@ mod tests {
         msg7.payload.data[0] = 0xFE;
         msg7.payload.data_len = 1;
         msg7.generation_time_us = 2_100_000;
-        {
-            let data_len = msg7.payload.data_len as usize;
-            let clamped_len = if data_len > MAX_PAYLOAD_LEN {
-                MAX_PAYLOAD_LEN
-            } else {
-                data_len
-            };
-            let header_len = 24;
-            let total_len = header_len + clamped_len;
-            let mut buf = [0u8; 24 + MAX_PAYLOAD_LEN];
-            buf[0..8].copy_from_slice(&msg7.generation_time_us.to_le_bytes());
-            buf[8..12].copy_from_slice(&msg7.payload.latitude_udeg.to_le_bytes());
-            buf[12..16].copy_from_slice(&msg7.payload.longitude_udeg.to_le_bytes());
-            buf[16..20].copy_from_slice(&msg7.payload.speed_cm_s.to_le_bytes());
-            buf[20..22].copy_from_slice(&msg7.payload.heading_cdeg.to_le_bytes());
-            buf[22..24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
-            if clamped_len > 0 {
-                buf[header_len..total_len].copy_from_slice(&msg7.payload.data[..clamped_len]);
-            }
-            let mut digest = [0u8; 32];
-            validator
-                .crypto
-                .sha256(&buf[..total_len], &mut digest)
-                .unwrap();
-            for j in 0..64 {
-                msg7.signature[j] = digest[j % 32] ^ msg7.signer_public_key[1 + (j % 32)];
-            }
-        }
+        test_sign(&validator.crypto, &mut msg7);
         let result7 = validator.validate(&msg7, 2_100_000);
         assert!(
             result7.is_ok(),
@@ -3079,30 +3067,8 @@ mod tests {
 
         // First call at t=10s to initialize.
         let mut msg = make_test_message();
-        {
-            let mut buf = [0u8; 1024];
-            let header_len = 24;
-            buf[..8].copy_from_slice(&(10_000_000u64).to_le_bytes());
-            buf[8..12].copy_from_slice(&msg.payload.latitude_udeg.to_le_bytes());
-            buf[12..16].copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
-            buf[16..20].copy_from_slice(&msg.payload.speed_cm_s.to_le_bytes());
-            buf[20..22].copy_from_slice(&msg.payload.heading_cdeg.to_le_bytes());
-            let clamped_len = (msg.payload.data_len as usize).min(MAX_PAYLOAD_LEN);
-            buf[22..24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
-            let total_len = header_len + clamped_len;
-            if clamped_len > 0 {
-                buf[header_len..total_len].copy_from_slice(&msg.payload.data[..clamped_len]);
-            }
-            let mut digest = [0u8; 32];
-            validator
-                .crypto
-                .sha256(&buf[..total_len], &mut digest)
-                .unwrap();
-            msg.generation_time_us = 10_000_000;
-            for j in 0..64 {
-                msg.signature[j] = digest[j % 32] ^ msg.signer_public_key[1 + (j % 32)];
-            }
-        }
+        msg.generation_time_us = 10_000_000;
+        test_sign(&validator.crypto, &mut msg);
         let _ = validator.validate(&msg, 10_000_000);
 
         // Consume remaining tokens at t=10s.
@@ -3120,29 +3086,7 @@ mod tests {
         // which should refill at least 5 * 2 = 10 tokens.
         let mut msg2 = make_test_message();
         msg2.generation_time_us = 4_000_000;
-        {
-            let mut buf = [0u8; 1024];
-            let header_len = 24;
-            buf[..8].copy_from_slice(&(4_000_000u64).to_le_bytes());
-            buf[8..12].copy_from_slice(&msg2.payload.latitude_udeg.to_le_bytes());
-            buf[12..16].copy_from_slice(&msg2.payload.longitude_udeg.to_le_bytes());
-            buf[16..20].copy_from_slice(&msg2.payload.speed_cm_s.to_le_bytes());
-            buf[20..22].copy_from_slice(&msg2.payload.heading_cdeg.to_le_bytes());
-            let clamped_len = (msg2.payload.data_len as usize).min(MAX_PAYLOAD_LEN);
-            buf[22..24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
-            let total_len = header_len + clamped_len;
-            if clamped_len > 0 {
-                buf[header_len..total_len].copy_from_slice(&msg2.payload.data[..clamped_len]);
-            }
-            let mut digest = [0u8; 32];
-            validator
-                .crypto
-                .sha256(&buf[..total_len], &mut digest)
-                .unwrap();
-            for j in 0..64 {
-                msg2.signature[j] = digest[j % 32] ^ msg2.signer_public_key[1 + (j % 32)];
-            }
-        }
+        test_sign(&validator.crypto, &mut msg2);
 
         // First call at t=2s resets the rate limiter timestamp.
         let _ = validator.validate(&msg2, 2_000_000);
