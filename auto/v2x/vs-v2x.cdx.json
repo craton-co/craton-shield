@@ -14,7 +14,7 @@
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-auto/crates/v2x#vs-v2x@0.7.0",
+      "bom-ref": "path+file:///workspace/craton-shield/auto/v2x#vs-v2x@0.7.0",
       "name": "vs-v2x",
       "version": "0.7.0",
       "description": "Craton Shield V2X communication security with IEEE 1609.2 validation",
@@ -28,13 +28,13 @@
       "externalReferences": [
         {
           "type": "vcs",
-          "url": "https://github.com/craton-co/craton-shield-auto"
+          "url": "https://github.com/craton-co/craton-shield"
         }
       ],
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///workspace/craton-shield-auto/crates/v2x#vs-v2x@0.7.0 bin-target-0",
+          "bom-ref": "path+file:///workspace/craton-shield/auto/v2x#vs-v2x@0.7.0 bin-target-0",
           "name": "vs_v2x",
           "version": "0.7.0",
           "purl": "pkg:cargo/vs-v2x@0.7.0?download_url=file://.#src/lib.rs"
@@ -51,9 +51,9 @@
   "components": [
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
       "name": "vs-crypto",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Cryptographic provider traits and post-quantum abstractions for Craton Shield",
       "scope": "required",
       "licenses": [
@@ -61,7 +61,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-crypto@0.6.0?download_url=file:///workspace/craton-shield-core/crates/crypto",
+      "purl": "pkg:cargo/vs-crypto@0.7.0?download_url=file:///workspace/craton-shield-core/crates/crypto",
       "externalReferences": [
         {
           "type": "website",
@@ -75,9 +75,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
       "name": "vs-types",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Core types, error enums, and vehicle identity for Craton Shield",
       "scope": "required",
       "licenses": [
@@ -85,7 +85,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-types@0.6.0?download_url=file:///workspace/craton-shield-core/crates/types",
+      "purl": "pkg:cargo/vs-types@0.7.0?download_url=file:///workspace/craton-shield-core/crates/types",
       "externalReferences": [
         {
           "type": "website",
@@ -166,22 +166,22 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///workspace/craton-shield-auto/crates/v2x#vs-v2x@0.7.0",
+      "ref": "path+file:///workspace/craton-shield/auto/v2x#vs-v2x@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.8.2"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1"
       ]
