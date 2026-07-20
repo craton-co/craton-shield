@@ -1,6 +1,6 @@
 # vs-v2x
 
-> Part of [Craton Shield Auto](../../README.md) | [Architecture](../../docs/ARCHITECTURE.md)
+> Part of [Craton Shield Auto](../../README.md) | [Architecture](../../ARCHITECTURE.md)
 
 Craton Shield V2X communication security: validation helpers for
 IEEE 1609.2 / ETSI TS 103 097 message-flavoured payloads.
