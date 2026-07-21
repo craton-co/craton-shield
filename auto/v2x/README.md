@@ -70,21 +70,25 @@ See [core/docs/feature-flags.md](../../core/docs/feature-flags.md) for the full 
 
 ## Usage
 
-```rust
+```rust,ignore
 use vs_v2x::{V2xValidator, PlausibilityLimits};
 
-// Default plausibility limits (250 km/h max speed, 5 s max age)
-let mut validator = V2xValidator::new(crypto);
+// `crypto` is a caller-supplied `CryptoProvider` (ECDSA P-256 + SHA-256).
+// `message` is an already-decoded `V2xMessage` and `now_us` the current
+// time in microseconds since the Unix epoch.
 
-// Or with custom limits
+// Default plausibility limits (250 km/h max speed, 5 s max age).
 let mut validator = V2xValidator::with_limits(crypto, PlausibilityLimits {
-    max_speed_cm_s: 20_000, // 200 km/h
+    max_speed_cm_s: 5_556, // 200 km/h = 55.56 m/s
     ..PlausibilityLimits::default()
 });
 
+// `validate` enforces signature, replay, plausibility, and geo checks.
+// It does NOT check PSID; use `validate_with_chain` for PSID enforcement
+// (note: `V2xValidator::new` defaults to a deny-all PSID policy).
 match validator.validate(&message, now_us) {
     Ok(validated) => { /* forward validated.payload() to application */ }
-    Err(e) => { /* log rejection */ }
+    Err(err) => { /* log rejection: err is a VsError */ }
 }
 ```
 
