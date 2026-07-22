@@ -22,20 +22,37 @@ with configurable linear scaling (`physical = raw * scale + offset`).
 
 ## Usage
 
-```rust
+```rust,no_run
 use vs_signal_ids::{SignalIdsEngine, SignalDefinition, ByteOrder};
+use vs_can_monitor::CanFrame;
+use vs_types::VsError;
 
-let mut engine = SignalIdsEngine::new(0.1, 3.0)?; // alpha=0.1, z_threshold=3.0
-engine.define_signal(SignalDefinition {
-    can_id: 0x100, start_bit: 0, bit_length: 16,
-    byte_order: ByteOrder::LittleEndian,
-    scale: 0.1, offset: -40.0, name_hash: 0xDEAD,
-    ..Default::default()
-})?;
+fn main() -> Result<(), VsError> {
+    let mut engine = SignalIdsEngine::new(0.1, 3.0)?; // alpha=0.1, z_threshold=3.0
+    engine.define_signal(SignalDefinition {
+        can_id: 0x100,
+        start_bit: 0,
+        bit_length: 16,
+        byte_order: ByteOrder::LittleEndian,
+        scale: 0.1,
+        offset: -40.0,
+        name_hash: 0xDEAD,
+        ..Default::default()
+    })?;
 
-let result = engine.process_frame(&frame);
-if result.anomaly_count > 0 {
-    // signal anomaly detected — raise alert
+    let frame = CanFrame {
+        id: 0x100,
+        is_extended: false,
+        is_fd: false,
+        dlc: 8,
+        data: [0u8; 64],
+    };
+
+    let result = engine.process_frame(&frame);
+    if result.anomaly_count > 0 {
+        // signal anomaly detected — raise alert
+    }
+    Ok(())
 }
 ```
 
