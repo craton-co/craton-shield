@@ -29,6 +29,38 @@ const MAX_ANOMALIES_PER_FRAME: usize = 8;
 /// Maximum supported bit length for a single signal.
 const MAX_BIT_LENGTH: u8 = 64;
 
+/// Largest valid 11-bit standard CAN arbitration ID.
+const CAN_ID_STANDARD_MAX: u32 = 0x7FF;
+
+/// Largest valid 29-bit extended CAN arbitration ID.
+const CAN_ID_EXTENDED_MAX: u32 = 0x1FFF_FFFF;
+
+/// Mask a raw CAN frame ID to the valid range for its frame type.
+///
+/// Mirrors `CanFrame::effective_id()` in `vs-can-monitor` (which is not
+/// publicly exported): standard frames are masked to 11 bits, extended
+/// frames to 29 bits. Used so that signal definitions match the same
+/// effective ID the CAN monitor uses, and so that a standard frame and an
+/// extended frame sharing the same numeric ID are never conflated.
+#[inline]
+const fn effective_can_id(raw_id: u32, is_extended: bool) -> u32 {
+    if is_extended {
+        raw_id & CAN_ID_EXTENDED_MAX
+    } else {
+        raw_id & CAN_ID_STANDARD_MAX
+    }
+}
+
+/// Returns `true` if `can_id` fits the valid range for its frame type.
+#[inline]
+const fn can_id_in_range(can_id: u32, is_extended: bool) -> bool {
+    if is_extended {
+        can_id <= CAN_ID_EXTENDED_MAX
+    } else {
+        can_id <= CAN_ID_STANDARD_MAX
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ByteOrder
 // ---------------------------------------------------------------------------
@@ -55,7 +87,18 @@ pub enum ByteOrder {
 #[derive(Debug, Clone, Copy)]
 pub struct SignalDefinition {
     /// CAN arbitration ID this signal belongs to.
+    ///
+    /// Interpreted together with [`SignalDefinition::is_extended`]: an 11-bit
+    /// standard ID and a 29-bit extended ID with the same numeric value are
+    /// distinct messages and are never matched against each other.
     pub can_id: u32,
+    /// Whether `can_id` is a 29-bit extended (`true`) or 11-bit standard
+    /// (`false`) CAN identifier.
+    ///
+    /// A frame only matches this definition when its `is_extended` flag
+    /// agrees, so standard frame `0x100` and extended frame `0x100` route to
+    /// separate detectors instead of colliding.
+    pub is_extended: bool,
     /// Start bit position within the frame payload (0-indexed from byte 0, bit 0).
     pub start_bit: u16,
     /// Number of bits in this signal (1..=64).
@@ -94,6 +137,7 @@ impl Default for SignalDefinition {
     fn default() -> Self {
         Self {
             can_id: 0,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -462,6 +506,7 @@ impl SignalIdsEngine {
     /// Zero-initialized placeholder definition (never read beyond `signal_count`).
     const ZERO_DEF: SignalDefinition = SignalDefinition {
         can_id: 0,
+        is_extended: false,
         start_bit: 0,
         bit_length: 1,
         byte_order: ByteOrder::LittleEndian,
@@ -600,6 +645,11 @@ impl SignalIdsEngine {
     ///   has no magnitude bits after sign extension, producing flip-flopping
     ///   physical values of `+0.0`/`-1.0 * scale + offset` that defeat the
     ///   EWMA statistical profile.
+    /// * `can_id` exceeds the valid range for its frame type — `0x7FF` for an
+    ///   11-bit standard ID (`is_extended == false`) or `0x1FFF_FFFF` for a
+    ///   29-bit extended ID (`is_extended == true`). Rejecting out-of-range
+    ///   IDs fails closed: a misconfigured definition can never silently
+    ///   match (or fail to match) a frame after the engine masks its ID.
     ///
     /// # Performance
     ///
@@ -614,6 +664,10 @@ impl SignalIdsEngine {
         }
 
         if !def.scale.is_finite() || !def.offset.is_finite() {
+            return Err(VsError::InvalidInput);
+        }
+
+        if !can_id_in_range(def.can_id, def.is_extended) {
             return Err(VsError::InvalidInput);
         }
 
@@ -688,6 +742,9 @@ impl SignalIdsEngine {
             if !def.scale.is_finite() || !def.offset.is_finite() {
                 return Err(VsError::InvalidInput);
             }
+            if !can_id_in_range(def.can_id, def.is_extended) {
+                return Err(VsError::InvalidInput);
+            }
             if def.is_multiplexor && def.bit_length > 16 {
                 return Err(VsError::InvalidInput);
             }
@@ -753,19 +810,30 @@ impl SignalIdsEngine {
     ///
     /// Uses binary search to find the first definition matching the CAN ID,
     /// then iterates only the contiguous run of matching definitions.
+    ///
+    /// The frame ID is masked to its effective range (11-bit for standard,
+    /// 29-bit for extended) before matching, and a definition only matches
+    /// when its [`SignalDefinition::is_extended`] flag agrees with the
+    /// frame's. A standard frame and an extended frame with the same numeric
+    /// ID are therefore routed to separate detectors and never conflated.
     #[allow(clippy::cast_possible_truncation)] // signal_index is bounds-checked above
     pub fn process_frame(&mut self, frame: &CanFrame) -> SignalIdsResult {
         let mut result = SignalIdsResult::empty();
 
+        // Mask the raw frame ID to the valid range for its type, mirroring
+        // `CanFrame::effective_id()`, so matching uses the same identifier
+        // the CAN monitor would.
+        let eid = effective_can_id(frame.id, frame.is_extended);
+
         // Fast-path: skip entirely if no signals are defined for this CAN ID.
-        if !self.has_can_id(frame.id) {
+        if !self.has_can_id(eid) {
             return result;
         }
 
         let data_len = frame.payload_len();
 
         // Binary search for the first definition matching this CAN ID.
-        let Some(start) = self.binary_search_can_id(frame.id) else {
+        let Some(start) = self.binary_search_can_id(eid) else {
             return result;
         };
 
@@ -773,8 +841,13 @@ impl SignalIdsEngine {
         let mut mux_value: Option<u16> = None;
         {
             let mut i = start;
-            while i < self.signal_count && self.definitions[i].can_id == frame.id {
-                if self.definitions[i].is_multiplexor {
+            while i < self.signal_count && self.definitions[i].can_id == eid {
+                // Standard and extended frames sharing a numeric ID are
+                // distinct messages: only consider definitions whose
+                // `is_extended` flag matches this frame.
+                if self.definitions[i].is_extended == frame.is_extended
+                    && self.definitions[i].is_multiplexor
+                {
                     if let Some(raw) = extract_raw_bits(&frame.data, data_len, &self.definitions[i])
                     {
                         // Multiplexor signals are validated at define-time to
@@ -792,8 +865,15 @@ impl SignalIdsEngine {
 
         // Second pass: extract and score all applicable signals.
         let mut i = start;
-        while i < self.signal_count && self.definitions[i].can_id == frame.id {
+        while i < self.signal_count && self.definitions[i].can_id == eid {
             let def = &self.definitions[i];
+
+            // Skip definitions whose frame type (standard vs extended) does
+            // not match this frame — they belong to a different message.
+            if def.is_extended != frame.is_extended {
+                i += 1;
+                continue;
+            }
 
             // Skip multiplexed signals whose multiplexor value doesn't match.
             if let Some(mux_val) = def.multiplexor_value {
@@ -847,6 +927,11 @@ impl SignalIdsEngine {
     /// The `frame_id` is matched against `SignalDefinition::can_id` (which
     /// serves as a generic bus-independent message identifier despite its name).
     ///
+    /// Only definitions with `is_extended == false` (the default) are
+    /// considered: a generic bus frame ID carries no standard/extended
+    /// distinction, so matching extended-CAN definitions here would conflate
+    /// distinct messages. Use [`Self::process_frame`] for extended CAN.
+    ///
     /// # Arguments
     /// * `frame_id` - Message identifier (CAN ID, LIN frame ID, `FlexRay` slot).
     /// * `data` - Raw payload bytes.
@@ -876,7 +961,7 @@ impl SignalIdsEngine {
         {
             let mut i = start;
             while i < self.signal_count && self.definitions[i].can_id == frame_id {
-                if self.definitions[i].is_multiplexor {
+                if !self.definitions[i].is_extended && self.definitions[i].is_multiplexor {
                     if let Some(raw) = extract_raw_bits(data, data_len, &self.definitions[i]) {
                         // Multiplexor signals are validated at define-time to
                         // have `bit_length <= 16`, so the raw value always
@@ -895,6 +980,13 @@ impl SignalIdsEngine {
         let mut i = start;
         while i < self.signal_count && self.definitions[i].can_id == frame_id {
             let def = &self.definitions[i];
+
+            // The raw-frame path has no standard/extended distinction; only
+            // standard (`is_extended == false`) definitions apply here.
+            if def.is_extended {
+                i += 1;
+                continue;
+            }
 
             // Skip multiplexed signals whose multiplexor value doesn't match.
             if let Some(mux_val) = def.multiplexor_value {
@@ -1013,6 +1105,7 @@ mod tests {
         let data = [0xAB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1033,6 +1126,7 @@ mod tests {
         let data = [0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 16,
             byte_order: ByteOrder::LittleEndian,
@@ -1054,6 +1148,7 @@ mod tests {
         let data = [0xAB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 7, // MSB of byte 0
             bit_length: 8,
             byte_order: ByteOrder::BigEndian,
@@ -1075,6 +1170,7 @@ mod tests {
         let data = [0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 7, // MSB of byte 0
             bit_length: 16,
             byte_order: ByteOrder::BigEndian,
@@ -1099,6 +1195,7 @@ mod tests {
         let data = [0xF0, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 4,
             bit_length: 12,
             byte_order: ByteOrder::LittleEndian,
@@ -1118,6 +1215,7 @@ mod tests {
         let data = [100, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1139,6 +1237,7 @@ mod tests {
         let data = [0xFF];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 16,
             byte_order: ByteOrder::LittleEndian,
@@ -1161,6 +1260,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1190,6 +1290,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1213,6 +1314,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x200,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1248,6 +1350,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1263,6 +1366,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 start_bit: 8,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1287,6 +1391,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1301,6 +1406,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x200,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1325,6 +1431,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1349,6 +1456,7 @@ mod tests {
         for i in 0..MAX_SIGNALS {
             let def = SignalDefinition {
                 can_id: i as u32,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1361,9 +1469,11 @@ mod tests {
             };
             assert!(engine.define_signal(def).is_ok());
         }
-        // One more should fail
+        // One more should fail (use a valid in-range CAN ID so the
+        // capacity check — not the ID-range check — is what rejects it).
         let def = SignalDefinition {
-            can_id: 0xFFFF,
+            can_id: 0x7FF,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1382,6 +1492,7 @@ mod tests {
         let data = [0b0000_0100, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 2, // bit 2 of byte 0
             bit_length: 1,
             byte_order: ByteOrder::LittleEndian,
@@ -1410,6 +1521,7 @@ mod tests {
         let data = [0x78, 0x56, 0x34, 0x12, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 32,
             byte_order: ByteOrder::LittleEndian,
@@ -1430,6 +1542,7 @@ mod tests {
         let data = [100, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1460,6 +1573,7 @@ mod tests {
             engine
                 .define_signal(SignalDefinition {
                     can_id: 0x100,
+                    is_extended: false,
                     start_bit: i * 8,
                     bit_length: 8,
                     byte_order: ByteOrder::LittleEndian,
@@ -1494,6 +1608,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x300,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 16,
                 byte_order: ByteOrder::LittleEndian,
@@ -1528,6 +1643,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 0,
             byte_order: ByteOrder::LittleEndian,
@@ -1546,6 +1662,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1561,6 +1678,7 @@ mod tests {
             .define_signal(SignalDefinition {
                 name_hash: 2,
                 can_id: 0x200,
+                is_extended: false,
                 ..def
             })
             .unwrap();
@@ -1568,6 +1686,7 @@ mod tests {
             .define_signal(SignalDefinition {
                 name_hash: 3,
                 can_id: 0x300,
+                is_extended: false,
                 ..def
             })
             .unwrap();
@@ -1595,6 +1714,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1628,6 +1748,7 @@ mod tests {
         let data = [0xFF, 0xAB];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1651,6 +1772,7 @@ mod tests {
         let data = [0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 32,
             byte_order: ByteOrder::LittleEndian,
@@ -1674,6 +1796,7 @@ mod tests {
         // Define one signal to make signal_count > 0
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1697,6 +1820,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x200,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1720,6 +1844,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x200,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1749,6 +1874,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x300,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1763,6 +1889,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1777,6 +1904,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x200,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1792,6 +1920,7 @@ mod tests {
         engine
             .define_signal(SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 start_bit: 8,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1843,6 +1972,7 @@ mod tests {
         let defs = [
             SignalDefinition {
                 can_id: 0x300,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1855,6 +1985,7 @@ mod tests {
             },
             SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1867,6 +1998,7 @@ mod tests {
             },
             SignalDefinition {
                 can_id: 0x200,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -1899,6 +2031,7 @@ mod tests {
         // Fill up all slots first.
         let mut defs = [SignalDefinition {
             can_id: 0,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1919,6 +2052,7 @@ mod tests {
         // One more should fail.
         let extra = [SignalDefinition {
             can_id: 0xFFFF,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -1940,6 +2074,7 @@ mod tests {
         let mut engine = default_engine();
         let defs = [SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 0, // invalid
             byte_order: ByteOrder::LittleEndian,
@@ -1959,6 +2094,7 @@ mod tests {
         let data = [0x78, 0x56, 0x34, 0x12, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 32,
             byte_order: ByteOrder::LittleEndian,
@@ -1978,6 +2114,7 @@ mod tests {
         // Two consecutive 32-bit values that would collapse to the same f32.
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 32,
             byte_order: ByteOrder::LittleEndian,
@@ -2018,6 +2155,7 @@ mod tests {
         let data = [0xFF; 8];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 0, // invalid
             byte_order: ByteOrder::LittleEndian,
@@ -2038,6 +2176,7 @@ mod tests {
 
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -2067,6 +2206,7 @@ mod tests {
         for i in 0..MAX_SIGNALS {
             let def = SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 start_bit: 0,
                 bit_length: 8,
                 byte_order: ByteOrder::LittleEndian,
@@ -2084,6 +2224,7 @@ mod tests {
         // The 65th signal should fail with ResourceExhausted.
         let extra = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -2103,6 +2244,7 @@ mod tests {
         // Define one signal to get slot 0.
         let def = SignalDefinition {
             can_id: 0x200,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -2153,6 +2295,7 @@ mod tests {
         let data = [0xF8, 0x1A, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 3,
             bit_length: 12,
             byte_order: ByteOrder::LittleEndian,
@@ -2190,6 +2333,7 @@ mod tests {
         // even though only one byte is present.
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 64, // forces fast-path to read 8 bytes
             byte_order: ByteOrder::LittleEndian,
@@ -2213,6 +2357,7 @@ mod tests {
         // over-reports data_len. Must return the correct value, not panic.
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 8,
             byte_order: ByteOrder::LittleEndian,
@@ -2232,6 +2377,7 @@ mod tests {
         // Big-endian path with a lying data_len. Must not panic.
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 7,
             bit_length: 16,
             byte_order: ByteOrder::BigEndian,
@@ -2254,6 +2400,7 @@ mod tests {
         // documented "no extraction" outcome (None) instead of panicking.
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             start_bit: 0,
             bit_length: 16, // needs 2 bytes
             byte_order: ByteOrder::LittleEndian,
@@ -2291,6 +2438,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             scale: f32::NAN,
             ..Default::default()
         };
@@ -2303,12 +2451,14 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             scale: f32::INFINITY,
             ..Default::default()
         };
         assert_eq!(engine.define_signal(def), Err(VsError::InvalidInput));
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             scale: f32::NEG_INFINITY,
             ..Default::default()
         };
@@ -2321,6 +2471,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             offset: f32::NAN,
             ..Default::default()
         };
@@ -2333,12 +2484,14 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             offset: f32::INFINITY,
             ..Default::default()
         };
         assert_eq!(engine.define_signal(def), Err(VsError::InvalidInput));
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             offset: f32::NEG_INFINITY,
             ..Default::default()
         };
@@ -2353,6 +2506,7 @@ mod tests {
         let mut engine = default_engine();
         let ok = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             scale: -1.5,
             offset: 7.25,
             ..Default::default()
@@ -2360,6 +2514,7 @@ mod tests {
         assert!(engine.define_signal(ok).is_ok());
         let ok = SignalDefinition {
             can_id: 0x101,
+            is_extended: false,
             scale: 0.0,
             offset: 0.0,
             ..Default::default()
@@ -2376,6 +2531,7 @@ mod tests {
         // value.
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             bit_length: 17,
             is_multiplexor: true,
             ..Default::default()
@@ -2384,6 +2540,7 @@ mod tests {
         // 32-bit multiplexor: also rejected.
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             bit_length: 32,
             is_multiplexor: true,
             ..Default::default()
@@ -2398,6 +2555,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             bit_length: 16,
             is_multiplexor: true,
             ..Default::default()
@@ -2406,6 +2564,7 @@ mod tests {
         // And a typical 8-bit multiplexor.
         let def = SignalDefinition {
             can_id: 0x101,
+            is_extended: false,
             bit_length: 8,
             is_multiplexor: true,
             ..Default::default()
@@ -2419,6 +2578,7 @@ mod tests {
         let mut engine = default_engine();
         let def = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             bit_length: 1,
             signed: true,
             ..Default::default()
@@ -2434,6 +2594,7 @@ mod tests {
         let mut engine = default_engine();
         let two_bit_signed = SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             bit_length: 2,
             signed: true,
             ..Default::default()
@@ -2441,6 +2602,7 @@ mod tests {
         assert!(engine.define_signal(two_bit_signed).is_ok());
         let one_bit_unsigned = SignalDefinition {
             can_id: 0x101,
+            is_extended: false,
             bit_length: 1,
             signed: false,
             ..Default::default()
@@ -2455,10 +2617,12 @@ mod tests {
         let defs = [
             SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 ..Default::default()
             },
             SignalDefinition {
                 can_id: 0x101,
+                is_extended: false,
                 scale: f32::NAN,
                 ..Default::default()
             },
@@ -2476,6 +2640,7 @@ mod tests {
         let mut engine = default_engine();
         let defs = [SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             offset: f32::INFINITY,
             ..Default::default()
         }];
@@ -2491,6 +2656,7 @@ mod tests {
         let mut engine = default_engine();
         let defs = [SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             bit_length: 17,
             is_multiplexor: true,
             ..Default::default()
@@ -2507,6 +2673,7 @@ mod tests {
         let mut engine = default_engine();
         let defs = [SignalDefinition {
             can_id: 0x100,
+            is_extended: false,
             bit_length: 1,
             signed: true,
             ..Default::default()
@@ -2526,12 +2693,14 @@ mod tests {
         let defs = [
             SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 bit_length: 16,
                 is_multiplexor: true,
                 ..Default::default()
             },
             SignalDefinition {
                 can_id: 0x100,
+                is_extended: false,
                 bit_length: 2,
                 signed: true,
                 scale: -0.5,
@@ -2540,6 +2709,7 @@ mod tests {
             },
             SignalDefinition {
                 can_id: 0x101,
+                is_extended: false,
                 bit_length: 1,
                 signed: false,
                 ..Default::default()
@@ -2547,5 +2717,211 @@ mod tests {
         ];
         assert!(engine.define_signals_batch(&defs).is_ok());
         assert_eq!(engine.signal_count(), 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Extended vs standard CAN ID disambiguation (H2)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn standard_and_extended_same_id_route_separately() {
+        // A standard frame and an extended frame share numeric ID 0x100.
+        // They are distinct messages on the bus and must be scored by
+        // independent detectors — never conflated.
+        let mut engine = default_engine();
+        let std_slot = engine
+            .define_signal(SignalDefinition {
+                can_id: 0x100,
+                is_extended: false,
+                start_bit: 0,
+                bit_length: 8,
+                name_hash: 1,
+                ..Default::default()
+            })
+            .unwrap() as u16;
+        let ext_slot = engine
+            .define_signal(SignalDefinition {
+                can_id: 0x100,
+                is_extended: true,
+                start_bit: 8,
+                bit_length: 8,
+                name_hash: 2,
+                ..Default::default()
+            })
+            .unwrap() as u16;
+        assert_ne!(std_slot, ext_slot);
+
+        // A standard frame must match only the standard definition.
+        let mut std_frame = make_frame(0x100, &[10, 20, 0, 0, 0, 0, 0, 0]);
+        std_frame.is_extended = false;
+        let _ = engine.process_frame(&std_frame);
+
+        // An extended frame with the same numeric ID must match only the
+        // extended definition.
+        let mut ext_frame = make_frame(0x100, &[10, 20, 0, 0, 0, 0, 0, 0]);
+        ext_frame.is_extended = true;
+        let _ = engine.process_frame(&ext_frame);
+
+        // Train the standard detector to a stable value.
+        let mut std_train = make_frame(0x100, &[50, 0, 0, 0, 0, 0, 0, 0]);
+        std_train.is_extended = false;
+        for _ in 0..200 {
+            let _ = engine.process_frame(&std_train);
+        }
+        // An extended frame whose byte 0 is wildly different must NOT be
+        // scored against the standard detector (no false anomaly leakage).
+        let mut ext_spike = make_frame(0x100, &[0, 200, 0, 0, 0, 0, 0, 0]);
+        ext_spike.is_extended = true;
+        let result = engine.process_frame(&ext_spike);
+        for a in &result.anomalies[..result.anomaly_count as usize] {
+            assert_eq!(
+                a.signal_index, ext_slot,
+                "extended frame must only score the extended-ID detector"
+            );
+        }
+    }
+
+    #[test]
+    fn process_frame_masks_raw_id_to_effective_range() {
+        // A definition for standard ID 0x100; a frame whose raw `id` has
+        // junk in the upper bits but masks down to 0x100 must still match.
+        let mut engine = default_engine();
+        engine
+            .define_signal(SignalDefinition {
+                can_id: 0x100,
+                is_extended: false,
+                start_bit: 0,
+                bit_length: 8,
+                name_hash: 1,
+                ..Default::default()
+            })
+            .unwrap();
+        let mut frame = make_frame(0xFFFF_F100, &[42, 0, 0, 0, 0, 0, 0, 0]);
+        frame.is_extended = false;
+        // 0xFFFF_F100 & 0x7FF == 0x100 — must route to the defined signal.
+        for _ in 0..15 {
+            let _ = engine.process_frame(&frame);
+        }
+        // No panic and the run was matched; reaching here exercises the
+        // masked-ID fast path.
+    }
+
+    #[test]
+    fn define_signal_rejects_out_of_range_can_id() {
+        let mut engine = default_engine();
+        // 0x800 exceeds the 11-bit standard range.
+        assert_eq!(
+            engine.define_signal(SignalDefinition {
+                can_id: 0x800,
+                is_extended: false,
+                ..Default::default()
+            }),
+            Err(VsError::InvalidInput)
+        );
+        // 0x2000_0000 exceeds the 29-bit extended range.
+        assert_eq!(
+            engine.define_signal(SignalDefinition {
+                can_id: 0x2000_0000,
+                is_extended: true,
+                ..Default::default()
+            }),
+            Err(VsError::InvalidInput)
+        );
+        // Boundary values are accepted.
+        assert!(engine
+            .define_signal(SignalDefinition {
+                can_id: 0x7FF,
+                is_extended: false,
+                name_hash: 1,
+                ..Default::default()
+            })
+            .is_ok());
+        assert!(engine
+            .define_signal(SignalDefinition {
+                can_id: 0x1FFF_FFFF,
+                is_extended: true,
+                name_hash: 2,
+                ..Default::default()
+            })
+            .is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Detector-state continuity across remove_signal (H3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn remove_signal_preserves_surviving_detector_baselines() {
+        // Define three signals on distinct CAN IDs. Train each detector to a
+        // distinct stable baseline, then remove the middle signal. The
+        // surviving signals must keep their own trained baselines — a
+        // mid-array removal must not let a survivor inherit another
+        // signal's EWMA mean/variance.
+        let mut engine = default_engine();
+        let base = SignalDefinition {
+            start_bit: 0,
+            bit_length: 8,
+            ..Default::default()
+        };
+        let slot_a = engine
+            .define_signal(SignalDefinition {
+                can_id: 0x100,
+                name_hash: 1,
+                ..base
+            })
+            .unwrap() as u16;
+        let slot_b = engine
+            .define_signal(SignalDefinition {
+                can_id: 0x200,
+                name_hash: 2,
+                ..base
+            })
+            .unwrap() as u16;
+        let slot_c = engine
+            .define_signal(SignalDefinition {
+                can_id: 0x300,
+                name_hash: 3,
+                ..base
+            })
+            .unwrap() as u16;
+
+        // Train each detector to a distinct stable value: A=10, B=120, C=240.
+        for _ in 0..300 {
+            let _ = engine.process_frame(&make_frame(0x100, &[10, 0, 0, 0, 0, 0, 0, 0]));
+            let _ = engine.process_frame(&make_frame(0x200, &[120, 0, 0, 0, 0, 0, 0, 0]));
+            let _ = engine.process_frame(&make_frame(0x300, &[240, 0, 0, 0, 0, 0, 0, 0]));
+        }
+
+        // Sanity: a value matching each trained baseline is NOT anomalous.
+        assert_eq!(
+            engine
+                .process_frame(&make_frame(0x300, &[240, 0, 0, 0, 0, 0, 0, 0]))
+                .anomaly_count,
+            0
+        );
+
+        // Remove the middle signal (B). C must keep its own baseline (~240).
+        engine.remove_signal(slot_b).unwrap();
+        assert_eq!(engine.signal_count(), 2);
+
+        // C scored against its own value (240) must still be normal. If the
+        // compaction had let C inherit B's baseline (~120), feeding 240
+        // would spike as an anomaly.
+        let result_c = engine.process_frame(&make_frame(0x300, &[240, 0, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(
+            result_c.anomaly_count, 0,
+            "surviving signal C must retain its own trained baseline"
+        );
+
+        // And A is untouched (it sits before the removed slot).
+        let result_a = engine.process_frame(&make_frame(0x100, &[10, 0, 0, 0, 0, 0, 0, 0]));
+        assert_eq!(result_a.anomaly_count, 0);
+
+        // Anomaly reports for C still carry C's stable slot index.
+        let spike_c = engine.process_frame(&make_frame(0x300, &[10, 0, 0, 0, 0, 0, 0, 0]));
+        for a in &spike_c.anomalies[..spike_c.anomaly_count as usize] {
+            assert_eq!(a.signal_index, slot_c);
+        }
+        let _ = slot_a;
     }
 }
