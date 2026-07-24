@@ -1,6 +1,6 @@
 # vs-signal-ids
 
-> Part of [Craton Shield Auto](../../README.md) | [Architecture](../../docs/ARCHITECTURE.md)
+> Part of [Craton Shield Auto](../../README.md) | [Architecture](../../ARCHITECTURE.md)
 
 CAN signal-level intrusion detection using per-signal EWMA anomaly ensemble.
 
