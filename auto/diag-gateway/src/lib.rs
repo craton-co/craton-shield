@@ -31,6 +31,13 @@ const LOCKOUT_THRESHOLD: u8 = 3;
 /// Minimum interval (microseconds) between seed requests from the same tester.
 const MIN_SEED_INTERVAL_US: u64 = 100_000; // 100 ms
 
+/// Gateway-wide global failure budget. Once this many `SecurityAccess`
+/// failures are observed across *all* tester addresses within a single
+/// `lockout_duration_us` window, the gateway enters a global `SecurityAccess`
+/// lockout. This defeats brute-force attacks that rotate the (attacker-
+/// supplied) tester address to evade the per-address lockout table.
+const GLOBAL_FAILURE_THRESHOLD: u32 = (MAX_LOCKOUT_ENTRIES as u32) * (LOCKOUT_THRESHOLD as u32);
+
 /// Audit-log ring-buffer capacity. Must be a power of 2 for bitmask indexing.
 const AUDIT_LOG_CAPACITY: usize = 512;
 const _: () = assert!(AUDIT_LOG_CAPACITY.is_power_of_two());
@@ -545,6 +552,24 @@ pub struct DiagGateway<C: CryptoProvider> {
     nearest_expiry_us: u64,
     /// Last accepted timestamp for monotonicity enforcement.
     last_timestamp_us: u64,
+    /// Gateway-wide timestamp of the most recent `SecurityAccess` seed
+    /// request, regardless of tester address. Enforces a global seed-request
+    /// rate limit so an attacker cannot bypass the per-session rate limit by
+    /// rotating the (attacker-supplied) tester address across fresh sessions.
+    last_seed_request_global_us: u64,
+    /// Number of `SecurityAccess` failures observed across *all* tester
+    /// addresses since `global_failure_window_start_us`. Defeats brute-force
+    /// attacks that rotate the tester address to evade the per-address
+    /// lockout table.
+    global_failure_count: u32,
+    /// Start timestamp of the current global-failure accounting window.
+    /// The window is `lockout_duration_us` wide; failures older than this
+    /// are forgiven by resetting the counter.
+    global_failure_window_start_us: u64,
+    /// Absolute timestamp at which a global `SecurityAccess` lockout expires.
+    /// While `ts_us < global_lockout_until_us`, all seed and key requests are
+    /// rejected with `BlockReason::LockedOut`.
+    global_lockout_until_us: u64,
     /// Optional callback to persist audit entries to non-volatile storage.
     /// Set via `set_persistence_callbacks`.
     persist_entry_fn: Option<fn(&AuditEntry)>,
@@ -595,6 +620,10 @@ impl<C: CryptoProvider> DiagGateway<C> {
             active_sessions_mask: 0,
             nearest_expiry_us: u64::MAX,
             last_timestamp_us: 0,
+            last_seed_request_global_us: 0,
+            global_failure_count: 0,
+            global_failure_window_start_us: 0,
+            global_lockout_until_us: 0,
             persist_entry_fn: None,
             persist_lockout_fn: None,
         }
@@ -618,6 +647,18 @@ impl<C: CryptoProvider> DiagGateway<C> {
     /// Returns the last accepted timestamp for monotonicity verification.
     pub fn last_timestamp_us(&self) -> u64 {
         self.last_timestamp_us
+    }
+
+    /// Returns `true` if a gateway-wide `SecurityAccess` lockout is currently
+    /// in effect at `ts_us`.
+    ///
+    /// The global lockout engages when `SecurityAccess` failures accumulate
+    /// across *all* tester addresses faster than the gateway-wide budget
+    /// allows — a brute-force attacker cannot escape it by rotating the
+    /// (attacker-supplied) tester address. While active, every seed and key
+    /// request is rejected with [`BlockReason::LockedOut`].
+    pub fn is_globally_locked_out(&self, ts_us: u64) -> bool {
+        ts_us < self.global_lockout_until_us
     }
 
     /// Register persistence callbacks for audit entries and lockout state.
@@ -717,6 +758,18 @@ impl<C: CryptoProvider> DiagGateway<C> {
     /// * `sid`         - UDS Service Identifier.
     /// * `payload`     - Sub-function and data bytes following the SID.
     /// * `ts_us`       - Current timestamp in microseconds.
+    ///
+    /// # Security: tester-address spoofing
+    ///
+    /// `tester_addr` is attacker-controllable on a CAN/DoIP bus. The
+    /// per-address lockout table and per-session seed rate limit can
+    /// therefore be evaded by an attacker that rotates the source address.
+    /// To close that gap, `SecurityAccess` brute-force protection is also
+    /// enforced *globally*, independent of `tester_addr`: a gateway-wide
+    /// seed-request rate limit ([`MIN_SEED_INTERVAL_US`]) and a gateway-wide
+    /// failure budget that triggers a global `SecurityAccess` lockout (see
+    /// [`Self::is_globally_locked_out`]). Address-based tracking remains as
+    /// a precise first line of defence; the global limits are the backstop.
     pub fn receive_uds_request(
         &mut self,
         tester_addr: u16,
@@ -916,6 +969,25 @@ impl<C: CryptoProvider> DiagGateway<C> {
         ts_us: u64,
         security_level: u8,
     ) -> DiagDecision {
+        // Global SecurityAccess lockout (H1): a brute-force attacker can
+        // rotate the attacker-supplied tester address to evade the per-
+        // address lockout table and the per-session seed rate limit. The
+        // gateway-wide failure budget locks down seed issuance entirely once
+        // too many failures accumulate, regardless of source address.
+        if ts_us < self.global_lockout_until_us {
+            return DiagDecision::Block(BlockReason::LockedOut);
+        }
+
+        // Global seed-request rate limit (H1): enforced across ALL tester
+        // addresses so address rotation across fresh sessions cannot reset
+        // the rate-limit timer. `last_seed_request_global_us == 0` means no
+        // seed has been issued yet, so the very first request is allowed.
+        if self.last_seed_request_global_us > 0
+            && ts_us.saturating_sub(self.last_seed_request_global_us) < MIN_SEED_INTERVAL_US
+        {
+            return DiagDecision::Block(BlockReason::PolicyDenied);
+        }
+
         // Ensure the tester has a session (create one if capacity allows).
         let Some(session_idx) = self.get_or_create_session(tester_addr, ts_us) else {
             return DiagDecision::Block(BlockReason::SessionsFull);
@@ -942,6 +1014,9 @@ impl<C: CryptoProvider> DiagGateway<C> {
         self.sessions[session_idx].security_level = security_level;
         self.sessions[session_idx].last_activity_us = ts_us;
         self.sessions[session_idx].last_seed_request_us = ts_us;
+        // Advance the gateway-wide seed-request clock so a subsequent request
+        // from any (possibly rotated) tester address is rate-limited.
+        self.last_seed_request_global_us = ts_us;
 
         DiagDecision::Challenge(SecurityChallenge { seed })
     }
@@ -953,6 +1028,13 @@ impl<C: CryptoProvider> DiagGateway<C> {
         ts_us: u64,
         security_level: u8,
     ) -> DiagDecision {
+        // Global SecurityAccess lockout (H1): reject key submission while the
+        // gateway-wide brute-force lockout is in effect, regardless of the
+        // (attacker-supplied) tester address.
+        if ts_us < self.global_lockout_until_us {
+            return DiagDecision::Block(BlockReason::LockedOut);
+        }
+
         // Payload layout: [sub_fn(even), key_bytes(32)]
         if payload.len() < 33 {
             return DiagDecision::Block(BlockReason::Unauthorized);
@@ -1342,6 +1424,14 @@ impl<C: CryptoProvider> DiagGateway<C> {
     /// directly from tester-controlled payload data; always read from a
     /// hardware/OS-backed monotonic source.
     fn record_failure(&mut self, tester_addr: u16, ts_us: u64) {
+        // Gateway-wide failure accounting (H1). The per-address lockout table
+        // below is keyed on the attacker-supplied tester address, so an
+        // attacker who rotates the address evades it. The global counter
+        // tracks failures across ALL addresses within a `lockout_duration_us`
+        // window; once `GLOBAL_FAILURE_THRESHOLD` is reached the whole
+        // SecurityAccess service is locked out, independent of source address.
+        self.record_global_failure(ts_us);
+
         // Find existing entry.
         for entry in &mut self.lockouts {
             if entry.active && entry.tester_address == tester_addr {
@@ -1475,6 +1565,34 @@ impl<C: CryptoProvider> DiagGateway<C> {
                 }
                 return;
             }
+        }
+    }
+
+    /// Account a `SecurityAccess` failure against the gateway-wide failure
+    /// budget (H1). Unlike the per-address lockout table, this counter is
+    /// independent of the attacker-supplied tester address, so it cannot be
+    /// reset by address rotation.
+    ///
+    /// Failures are counted within a sliding window `lockout_duration_us`
+    /// wide. Once `GLOBAL_FAILURE_THRESHOLD` failures accumulate in one
+    /// window, the gateway enters a global `SecurityAccess` lockout for
+    /// `lockout_duration_us`, rejecting every seed and key request.
+    fn record_global_failure(&mut self, ts_us: u64) {
+        // Start a fresh window if the previous one has fully elapsed.
+        if self.global_failure_count == 0
+            || ts_us.saturating_sub(self.global_failure_window_start_us)
+                >= self.lockout_duration_us
+        {
+            self.global_failure_window_start_us = ts_us;
+            self.global_failure_count = 0;
+        }
+        self.global_failure_count = self.global_failure_count.saturating_add(1);
+
+        if self.global_failure_count >= GLOBAL_FAILURE_THRESHOLD {
+            // Engage the gateway-wide lockout and reset the counter so the
+            // window restarts cleanly once the lockout expires.
+            self.global_lockout_until_us = ts_us.saturating_add(self.lockout_duration_us);
+            self.global_failure_count = 0;
         }
     }
 }
@@ -1683,14 +1801,16 @@ mod tests {
     fn session_capacity_fifth_unauthenticated_evicts_oldest() {
         let mut gw = make_gateway();
 
-        // Create 4 unauthenticated sessions (MAX_SESSIONS).
+        // Create 4 unauthenticated sessions (MAX_SESSIONS). Seed requests are
+        // spaced >= MIN_SEED_INTERVAL_US apart to satisfy the gateway-wide
+        // seed rate limit (H1).
         for i in 0..4u16 {
             let tester = 0x0F00 + i;
             let d = gw.receive_uds_request(
                 tester,
                 SID_SECURITY_ACCESS,
                 &[SA_REQUEST_SEED],
-                (i as u64 + 1) * 1000,
+                (i as u64 + 1) * 200_000,
             );
             assert!(
                 matches!(d, DiagDecision::Challenge(_)),
@@ -1703,7 +1823,7 @@ mod tests {
             0x0F10,
             SID_SECURITY_ACCESS,
             &[SA_REQUEST_SEED],
-            200_000, // well past rate limit
+            1_200_000, // well past rate limit
         );
         assert!(
             matches!(d, DiagDecision::Challenge(_)),
@@ -1875,15 +1995,17 @@ mod tests {
         let tester_b = 0x0F21;
 
         // Authenticate tester A.
-        assert!(authenticate(&mut gw, tester_a, 1000));
-        // Authenticate tester B.
-        assert!(authenticate(&mut gw, tester_b, 2000));
+        assert!(authenticate(&mut gw, tester_a, 1_000_000));
+        // Authenticate tester B. The global seed rate limit (H1) is gateway-
+        // wide, so B's seed request must come >= MIN_SEED_INTERVAL_US after
+        // A's — realistic spacing for sequential diagnostic sessions.
+        assert!(authenticate(&mut gw, tester_b, 1_200_000));
 
         // Both should be able to use auth-required SIDs.
-        let d = gw.receive_uds_request(tester_a, SID_ROUTINE_CONTROL, &[], 3000);
+        let d = gw.receive_uds_request(tester_a, SID_ROUTINE_CONTROL, &[], 1_300_000);
         assert_eq!(d, DiagDecision::Forward);
 
-        let d = gw.receive_uds_request(tester_b, SID_ROUTINE_CONTROL, &[], 4000);
+        let d = gw.receive_uds_request(tester_b, SID_ROUTINE_CONTROL, &[], 1_400_000);
         assert_eq!(d, DiagDecision::Forward);
     }
 
@@ -2016,11 +2138,13 @@ mod tests {
     fn max_sessions_with_different_tester_addresses() {
         let mut gw = make_gateway();
 
-        // Create MAX_SESSIONS (4) sessions with different testers.
+        // Create MAX_SESSIONS (4) sessions with different testers. Seed
+        // requests are spaced >= MIN_SEED_INTERVAL_US apart to satisfy the
+        // gateway-wide seed rate limit (H1).
         for i in 0..4u16 {
             let tester = 0x0F60 + i;
             assert!(
-                authenticate(&mut gw, tester, (i as u64 + 1) * 1000),
+                authenticate(&mut gw, tester, (i as u64 + 1) * 200_000),
                 "tester {tester:#06X} should authenticate"
             );
         }
@@ -2028,7 +2152,7 @@ mod tests {
         // All 4 testers should be authenticated and able to use auth-required SIDs.
         for i in 0..4u16 {
             let tester = 0x0F60 + i;
-            let d = gw.receive_uds_request(tester, SID_ROUTINE_CONTROL, &[], 50_000);
+            let d = gw.receive_uds_request(tester, SID_ROUTINE_CONTROL, &[], 1_000_000);
             assert_eq!(
                 d,
                 DiagDecision::Forward,
@@ -2567,6 +2691,70 @@ mod tests {
         // Third request 200ms after first (above interval) — should succeed.
         let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], 1_200_000);
         assert!(matches!(d, DiagDecision::Challenge(_)));
+    }
+
+    #[test]
+    fn h1_global_seed_rate_limit_survives_address_rotation() {
+        // H1 regression: a single attacker rotating the (attacker-supplied)
+        // tester address gets a fresh session each time, which resets the
+        // per-session `last_seed_request_us`. The gateway-wide seed rate
+        // limit must still engage so address rotation cannot defeat it.
+        let mut gw = make_gateway();
+
+        // First seed request from address A — allowed.
+        let d = gw.receive_uds_request(0xA000, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], 1_000_000);
+        assert!(matches!(d, DiagDecision::Challenge(_)));
+
+        // Second seed request 50ms later from a FRESH address B. Without the
+        // global rate limit this would create a new session and bypass the
+        // per-session limit; it must be rejected.
+        let d = gw.receive_uds_request(0xB000, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], 1_050_000);
+        assert_eq!(
+            d,
+            DiagDecision::Block(BlockReason::PolicyDenied),
+            "address rotation must not bypass the global seed rate limit"
+        );
+
+        // After the global interval elapses, a fresh address is allowed.
+        let d = gw.receive_uds_request(0xC000, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], 1_200_000);
+        assert!(matches!(d, DiagDecision::Challenge(_)));
+    }
+
+    #[test]
+    fn h1_global_failure_budget_locks_out_rotating_attacker() {
+        // H1 regression: an attacker rotating the tester address evades the
+        // per-address lockout table (each address only ever sees a few
+        // failures). The gateway-wide failure budget must still engage and
+        // lock out the SecurityAccess service entirely.
+        let mut gw = make_gateway();
+
+        // Drive GLOBAL_FAILURE_THRESHOLD failures, each from a DIFFERENT
+        // address so no single address reaches LOCKOUT_THRESHOLD-driven
+        // tracking decisively. Space requests > MIN_SEED_INTERVAL_US apart.
+        let mut ts = 1_000_000u64;
+        for i in 0..GLOBAL_FAILURE_THRESHOLD {
+            let tester = 0x4000u16.wrapping_add(i as u16);
+            let _ = send_bad_key(&mut gw, tester, ts);
+            ts += 200_000;
+        }
+
+        // The gateway should now be in a global SecurityAccess lockout.
+        assert!(
+            gw.is_globally_locked_out(ts),
+            "global lockout must engage once the failure budget is exhausted"
+        );
+
+        // A brand-new address must be locked out too — rotation does not help.
+        let d = gw.receive_uds_request(0x9999, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], ts);
+        assert_eq!(d, DiagDecision::Block(BlockReason::LockedOut));
+
+        // After the global lockout duration elapses, seed issuance resumes.
+        let after = ts + gw.lockout_duration_us() + 1;
+        let d = gw.receive_uds_request(0x9999, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], after);
+        assert!(
+            matches!(d, DiagDecision::Challenge(_)),
+            "global lockout must lift after lockout_duration_us"
+        );
     }
 
     #[test]
