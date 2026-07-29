@@ -168,8 +168,24 @@ pub struct DiagSession {
     pub tester_address: u16,
     /// Whether the session has completed `SecurityAccess`.
     pub authenticated: bool,
-    /// Security level achieved via `SecurityAccess` (derived as `(sub_function + 1) / 2`).
+    /// Security level **achieved** via a verified `SecurityAccess` key
+    /// exchange (derived as `sub_function / 2`).
+    ///
+    /// This is `0` until [`DiagGateway::receive_uds_request`] processes a
+    /// valid key (SID 0x27, even sub-function) whose MAC matches. A bare
+    /// seed *request* does **not** raise this value — see
+    /// [`Self::pending_security_level`]. Per-SID `min_security_levels`
+    /// gating is evaluated against this achieved level only.
     pub security_level: u8,
+    /// Security level **requested** by the most recent `SecurityAccess` seed
+    /// request that has not yet been answered with a valid key.
+    ///
+    /// Set when a seed is issued and consumed (or cleared) when a key is
+    /// submitted. It exists purely to verify that the key send targets the
+    /// same level as the seed request. It MUST NOT be used to authorize
+    /// access — an attacker can set it freely by requesting a seed without
+    /// ever proving knowledge of the key.
+    pending_security_level: u8,
     /// Timestamp (microseconds) when the session was created.
     pub started_at: u64,
     /// Timestamp (microseconds) of last activity.
@@ -189,6 +205,7 @@ impl DiagSession {
             tester_address: 0,
             authenticated: false,
             security_level: 0,
+            pending_security_level: 0,
             started_at: 0,
             last_activity_us: 0,
             active: false,
@@ -915,6 +932,7 @@ impl<C: CryptoProvider> DiagGateway<C> {
             if sub_fn == DSC_DEFAULT_SESSION {
                 self.sessions[idx].authenticated = false;
                 self.sessions[idx].security_level = 0;
+                self.sessions[idx].pending_security_level = 0;
                 // Volatile-zeroize any pending seed to prevent its use after
                 // the security context has been reset.
                 if let Some(ref mut s) = self.sessions[idx].pending_seed {
@@ -1009,9 +1027,14 @@ impl<C: CryptoProvider> DiagGateway<C> {
             return DiagDecision::Block(BlockReason::GeneralProgrammingFailure);
         }
 
-        // Store the seed and requested security level in the session.
+        // Store the seed and the *requested* security level (L5). The
+        // requested level is recorded separately from the achieved
+        // `security_level` so a bare seed request cannot grant access to
+        // per-SID `min_security_levels`-gated services without the tester
+        // ever proving knowledge of the key. The achieved `security_level`
+        // is raised only by `handle_send_key` on a verified key.
         self.sessions[session_idx].pending_seed = Some(seed);
-        self.sessions[session_idx].security_level = security_level;
+        self.sessions[session_idx].pending_security_level = security_level;
         self.sessions[session_idx].last_activity_us = ts_us;
         self.sessions[session_idx].last_seed_request_us = ts_us;
         // Advance the gateway-wide seed-request clock so a subsequent request
@@ -1044,8 +1067,10 @@ impl<C: CryptoProvider> DiagGateway<C> {
             return DiagDecision::Block(BlockReason::Unauthorized);
         };
 
-        // Verify the security level matches the pending seed request.
-        if self.sessions[session_idx].security_level != security_level {
+        // Verify the key send targets the same level as the pending seed
+        // request (compared against the *requested* level, not the achieved
+        // one — see L5).
+        if self.sessions[session_idx].pending_security_level != security_level {
             return DiagDecision::Block(BlockReason::Unauthorized);
         }
 
@@ -1111,9 +1136,12 @@ impl<C: CryptoProvider> DiagGateway<C> {
                 .map(|s| s.as_ptr()),
         );
         self.sessions[session_idx].pending_seed = None;
+        // The seed request has now been answered; clear the requested level
+        // so it cannot influence a subsequent key send (L5).
+        self.sessions[session_idx].pending_security_level = 0;
 
         if diff == 0 {
-            // Authentication succeeded.
+            // Authentication succeeded — raise the *achieved* security level.
             self.sessions[session_idx].authenticated = true;
             self.sessions[session_idx].security_level = security_level;
             self.sessions[session_idx].last_activity_us = ts_us;
@@ -1214,6 +1242,7 @@ impl<C: CryptoProvider> DiagGateway<C> {
                 tester_address: tester_addr,
                 authenticated: false,
                 security_level: 0,
+                pending_security_level: 0,
                 started_at: ts_us,
                 last_activity_us: ts_us,
                 active: true,
@@ -1290,6 +1319,7 @@ impl<C: CryptoProvider> DiagGateway<C> {
             tester_address: tester_addr,
             authenticated: false,
             security_level: 0,
+            pending_security_level: 0,
             started_at: ts_us,
             last_activity_us: ts_us,
             active: true,
@@ -2280,6 +2310,40 @@ mod tests {
         } else {
             panic!("expected Block, got {d:?}");
         }
+    }
+
+    #[test]
+    fn l5_seed_request_does_not_grant_min_security_level() {
+        // L5 regression: a seed request records only the *requested* level.
+        // It must NOT raise the session's achieved `security_level`, so a
+        // tester cannot request a high-level seed and immediately pass a
+        // per-SID `min_security_levels` gate without ever sending a key.
+        let mut policy = UdsPolicy::new();
+        policy.allow_sid(0x22);
+        policy.set_min_security_level(0x22, 2);
+
+        let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
+        let tester = 0x0F70;
+
+        // Request a level-2 seed (sub-function 0x03) but never send a key.
+        let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &[0x03], 1_000_000);
+        assert!(matches!(d, DiagDecision::Challenge(_)), "expected challenge");
+
+        // The achieved security level must still be 0 — only a requested level
+        // was recorded.
+        let idx = gw.find_session(tester).expect("session exists");
+        assert_eq!(
+            gw.sessions[idx].security_level, 0,
+            "a bare seed request must not raise the achieved security level"
+        );
+
+        // 0x22 gated at level 2 must therefore still be denied.
+        let d = gw.receive_uds_request(tester, 0x22, &[], 1_200_000);
+        assert_eq!(
+            d,
+            DiagDecision::Block(BlockReason::SecurityAccessDenied),
+            "seed request alone must not unlock a min-security-level-gated SID"
+        );
     }
 
     #[test]
