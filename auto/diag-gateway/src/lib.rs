@@ -129,10 +129,27 @@ impl UdsPolicy {
     /// Set the minimum required `SecurityAccess` level for a SID.
     ///
     /// Requests carrying this SID are rejected with NRC 0x33
-    /// (`securityAccessDenied`) when the active session's `security_level`
-    /// is below `level`. A `level` of 0 disables the per-SID check.
-    pub fn set_min_security_level(&mut self, sid: u8, level: u8) {
+    /// (`securityAccessDenied`) when the active session's achieved
+    /// `security_level` is below `level`. A `level` of 0 disables the
+    /// per-SID check.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(sid)` and applies no change for SID `0x27`
+    /// (`SecurityAccess`) and SID `0x10` (`DiagnosticSessionControl`).
+    /// The gateway's `min_security_levels` pre-check intentionally exempts
+    /// both SIDs — `0x27` is the mechanism by which the level is raised, and
+    /// `0x10` must always be able to drop back to the default session. A
+    /// minimum configured for either SID would therefore be silently
+    /// ignored at runtime, so it is rejected here instead of accepted into
+    /// an unenforceable state. To require authentication for programming-
+    /// session transitions, use [`Self::require_auth_for_sid`] on `0x10`.
+    pub fn set_min_security_level(&mut self, sid: u8, level: u8) -> Result<(), u8> {
+        if sid == SID_SECURITY_ACCESS || sid == SID_DIAGNOSTIC_SESSION_CONTROL {
+            return Err(sid);
+        }
         self.min_security_levels[sid as usize] = level;
+        Ok(())
     }
 
     /// Returns the minimum required security level for `sid` (0 if none).
@@ -2288,13 +2305,39 @@ mod tests {
     }
 
     #[test]
+    fn h2_set_min_security_level_rejects_unenforceable_sids() {
+        // H2 regression: the min-security-level pre-check exempts SID 0x27
+        // and SID 0x10, so configuring a minimum for either would be silently
+        // ignored. `set_min_security_level` must reject them instead.
+        let mut policy = UdsPolicy::new();
+
+        assert_eq!(
+            policy.set_min_security_level(SID_SECURITY_ACCESS, 2),
+            Err(SID_SECURITY_ACCESS),
+            "0x27 must be rejected"
+        );
+        assert_eq!(
+            policy.set_min_security_level(SID_DIAGNOSTIC_SESSION_CONTROL, 2),
+            Err(SID_DIAGNOSTIC_SESSION_CONTROL),
+            "0x10 must be rejected"
+        );
+        // The rejected SIDs must remain at the default (no minimum).
+        assert_eq!(policy.min_security_level(SID_SECURITY_ACCESS), 0);
+        assert_eq!(policy.min_security_level(SID_DIAGNOSTIC_SESSION_CONTROL), 0);
+
+        // A normal SID is still accepted.
+        assert_eq!(policy.set_min_security_level(0x22, 3), Ok(()));
+        assert_eq!(policy.min_security_level(0x22), 3);
+    }
+
+    #[test]
     fn per_sid_min_level_blocks_request_below_threshold() {
         // SID 0x22 (ReadDataByIdentifier) configured to require security level 2.
         // After SecurityAccess sub-function 0x01 the session is at level 1,
         // so a 0x22 request must be rejected with SecurityAccessDenied (NRC 0x33).
         let mut policy = UdsPolicy::new();
         policy.allow_sid(0x22);
-        policy.set_min_security_level(0x22, 2);
+        policy.set_min_security_level(0x22, 2).expect("0x22 accepts a min level");
 
         let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0F80;
@@ -2320,7 +2363,7 @@ mod tests {
         // per-SID `min_security_levels` gate without ever sending a key.
         let mut policy = UdsPolicy::new();
         policy.allow_sid(0x22);
-        policy.set_min_security_level(0x22, 2);
+        policy.set_min_security_level(0x22, 2).expect("0x22 accepts a min level");
 
         let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0F70;
@@ -2353,7 +2396,7 @@ mod tests {
         // request is forwarded.
         let mut policy = UdsPolicy::new();
         policy.allow_sid(0x22);
-        policy.set_min_security_level(0x22, 2);
+        policy.set_min_security_level(0x22, 2).expect("0x22 accepts a min level");
 
         let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0F81;
