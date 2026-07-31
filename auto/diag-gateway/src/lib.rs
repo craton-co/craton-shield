@@ -62,6 +62,17 @@ const SA_SEND_KEY: u8 = 0x02;
 /// Upper limit for valid `SecurityAccess` sub-functions (UDS standard).
 const SA_MAX_SUB_FUNCTION: u8 = 0x42;
 
+/// `SecurityAccess` key length in bytes.
+///
+/// This gateway derives the expected key as `HMAC-SHA256(seed)`, whose
+/// output is always 32 bytes. The key length is therefore a fixed invariant
+/// of *this* SecurityAccess scheme, not a configurable parameter — a key of
+/// any other length can never match and is rejected as a failed attempt.
+const SA_KEY_LEN: usize = 32;
+
+/// Minimum `handle_send_key` payload length: 1 sub-function byte + the key.
+const SA_SEND_KEY_PAYLOAD_LEN: usize = 1 + SA_KEY_LEN;
+
 // Decision codes for audit log entries.
 const DECISION_FORWARD: u8 = 0;
 const DECISION_BLOCK: u8 = 1;
@@ -1075,11 +1086,9 @@ impl<C: CryptoProvider> DiagGateway<C> {
             return DiagDecision::Block(BlockReason::LockedOut);
         }
 
-        // Payload layout: [sub_fn(even), key_bytes(32)]
-        if payload.len() < 33 {
-            return DiagDecision::Block(BlockReason::Unauthorized);
-        }
-
+        // Locate the session first. Without one there is no pending seed and
+        // hence no handshake in progress — a stray key send is a malformed
+        // request, not a brute-force attempt, so it is not failure-tracked.
         let Some(session_idx) = self.find_session(tester_addr) else {
             return DiagDecision::Block(BlockReason::Unauthorized);
         };
@@ -1095,11 +1104,28 @@ impl<C: CryptoProvider> DiagGateway<C> {
             return DiagDecision::Block(BlockReason::Unauthorized);
         };
 
+        // Payload layout: [sub_fn(even), key_bytes(SA_KEY_LEN)]. The key
+        // length is a fixed invariant (HMAC-SHA256 output, see SA_KEY_LEN).
+        //
+        // H3: a wrong-length key sent against a session that *does* have a
+        // pending seed is a genuine — if malformed — authentication attempt.
+        // It must be failure-tracked like any other wrong key so an attacker
+        // cannot probe indefinitely through the length-mismatch path. The
+        // pending seed is consumed/zeroized so the malformed attempt cannot
+        // be retried against the same seed.
+        if payload.len() != SA_SEND_KEY_PAYLOAD_LEN {
+            self.zeroize_pending_seed(session_idx);
+            self.sessions[session_idx].pending_seed = None;
+            self.sessions[session_idx].pending_security_level = 0;
+            self.record_failure(tester_addr, ts_us);
+            return DiagDecision::Block(BlockReason::Unauthorized);
+        }
+
         // Compute expected HMAC-SHA256(seed) using the crypto provider.
         // On crypto failure, return `GeneralProgrammingFailure` rather than
         // `PolicyDenied` so the tester cannot distinguish a policy refusal
         // from a transient crypto-provider fault.
-        let mut expected_mac = [0u8; 32];
+        let mut expected_mac = [0u8; SA_KEY_LEN];
         if self
             .crypto
             .hmac_sha256(self.hmac_key_id, &seed, &mut expected_mac)
@@ -1108,11 +1134,12 @@ impl<C: CryptoProvider> DiagGateway<C> {
             return DiagDecision::Block(BlockReason::GeneralProgrammingFailure);
         }
 
-        let provided_key = &payload[1..33];
+        // Payload length was validated to be exactly SA_SEND_KEY_PAYLOAD_LEN.
+        let provided_key = &payload[1..SA_SEND_KEY_PAYLOAD_LEN];
 
         // Constant-time comparison (no short-circuit).
         let mut diff: u8 = 0;
-        for i in 0..32 {
+        for i in 0..SA_KEY_LEN {
             diff |= expected_mac[i] ^ provided_key[i];
         }
         // Prevent the compiler from optimizing away the constant-time
@@ -1132,26 +1159,7 @@ impl<C: CryptoProvider> DiagGateway<C> {
 
         // Zeroize and clear the pending seed regardless of outcome
         // to prevent extraction from memory dumps.
-        if let Some(ref mut s) = self.sessions[session_idx].pending_seed {
-            // Use volatile writes to prevent the compiler from eliding
-            // the zeroization. Plain writes followed by a drop can be
-            // optimized away since the compiler sees the value is unused.
-            // SAFETY: the pointer is derived from a valid mutable reference
-            // and is properly aligned. The volatile write prevents elision.
-            #[allow(unsafe_code)]
-            for b in s.iter_mut() {
-                // SAFETY: `b` is a valid, aligned, dereferenceable pointer
-                // derived from a live mutable reference.
-                unsafe { core::ptr::write_volatile(b, 0) };
-            }
-        }
-        // Compiler barrier: prevent elision of the volatile writes above.
-        core::hint::black_box(
-            self.sessions[session_idx]
-                .pending_seed
-                .as_ref()
-                .map(|s| s.as_ptr()),
-        );
+        self.zeroize_pending_seed(session_idx);
         self.sessions[session_idx].pending_seed = None;
         // The seed request has now been answered; clear the requested level
         // so it cannot influence a subsequent key send (L5).
@@ -1221,6 +1229,24 @@ impl<C: CryptoProvider> DiagGateway<C> {
     }
 
     // ---- Session management ----------------------------------------------
+
+    /// Volatile-zeroize the pending seed of session `idx`, if any.
+    ///
+    /// The volatile write prevents the compiler from eliding the
+    /// zeroization, keeping cryptographic seed material out of memory dumps.
+    /// The caller is responsible for setting `pending_seed = None` afterwards.
+    fn zeroize_pending_seed(&mut self, idx: usize) {
+        if let Some(ref mut s) = self.sessions[idx].pending_seed {
+            #[allow(unsafe_code)]
+            for b in s.iter_mut() {
+                // SAFETY: `b` is a valid, aligned, dereferenceable pointer
+                // derived from a live mutable reference.
+                unsafe { core::ptr::write_volatile(b, 0) };
+            }
+        }
+        // Compiler barrier: prevent elision of the volatile writes above.
+        core::hint::black_box(self.sessions[idx].pending_seed.as_ref().map(|s| s.as_ptr()));
+    }
 
     fn find_session(&self, tester_addr: u16) -> Option<usize> {
         let mut mask = self.active_sessions_mask;
@@ -2302,6 +2328,69 @@ mod tests {
         assert_eq!(BlockReason::Unauthorized.nrc(), 0x33);
         // Locked-out testers map to 0x37 (requiredTimeDelayNotExpired).
         assert_eq!(BlockReason::LockedOut.nrc(), 0x37);
+    }
+
+    #[test]
+    fn h3_wrong_length_key_is_failure_tracked() {
+        // H3 regression: a key send whose payload is not exactly
+        // SA_SEND_KEY_PAYLOAD_LEN long, sent against a session with a
+        // pending seed, is a genuine (malformed) authentication attempt and
+        // must be counted toward the brute-force lockout — not a silent
+        // dead end an attacker can probe indefinitely.
+        let mut gw = make_gateway();
+        let tester = 0x5000;
+        let mut ts = 1_000_000u64;
+
+        // Drive LOCKOUT_THRESHOLD malformed (too-short) key submissions.
+        for _ in 0..LOCKOUT_THRESHOLD {
+            let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], ts);
+            assert!(matches!(d, DiagDecision::Challenge(_)), "expected challenge");
+
+            // Key send with a short (16-byte) key — must be rejected AND tracked.
+            let mut payload = [0u8; 17];
+            payload[0] = SA_SEND_KEY;
+            let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &payload, ts + 1);
+            assert_eq!(d, DiagDecision::Block(BlockReason::Unauthorized));
+
+            ts += 200_000; // respect the seed rate limit
+        }
+
+        // After LOCKOUT_THRESHOLD malformed attempts the tester is locked out.
+        let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], ts);
+        assert_eq!(
+            d,
+            DiagDecision::Block(BlockReason::LockedOut),
+            "wrong-length keys must count toward lockout"
+        );
+    }
+
+    #[test]
+    fn h3_too_long_key_is_rejected() {
+        // A key longer than SA_KEY_LEN must also be rejected (exact-length
+        // invariant), not silently truncated and matched.
+        let mut gw = make_gateway();
+        let tester = 0x5100;
+
+        let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], 1_000_000);
+        let seed = match d {
+            DiagDecision::Challenge(c) => c.seed,
+            other => panic!("expected challenge, got {other:?}"),
+        };
+
+        // Build an over-long payload: correct key bytes plus trailing data.
+        let mut key = [0u8; 32];
+        gw.crypto
+            .hmac_sha256(gw.hmac_key_id, &seed, &mut key)
+            .expect("hmac");
+        let mut payload = [0u8; SA_SEND_KEY_PAYLOAD_LEN + 4];
+        payload[0] = SA_SEND_KEY;
+        payload[1..1 + 32].copy_from_slice(&key);
+        let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &payload, 1_000_001);
+        assert_eq!(
+            d,
+            DiagDecision::Block(BlockReason::Unauthorized),
+            "an over-long key payload must be rejected"
+        );
     }
 
     #[test]
