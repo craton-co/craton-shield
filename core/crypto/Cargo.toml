@@ -48,7 +48,7 @@ ecdsa = { version = "0.16", default-features = false, features = ["signing", "ve
 #
 #   See `src/pq.rs` (top-of-file comment) for the full rationale.
 # ---------------------------------------------------------------------------
-ml-kem = { version = "=0.2.1", default-features = false, optional = true }
+ml-kem = { version = "=0.2.3", default-features = false, optional = true }
 ml-dsa = { version = "=0.1.0-rc.3", default-features = false, optional = true }
 rand_core = { version = "0.6", default-features = false, optional = true }
 
