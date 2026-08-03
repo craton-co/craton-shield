@@ -1,6 +1,6 @@
 # vs-diag-gateway
 
-> Part of [Craton Shield Auto](../../README.md) | [Architecture](../../docs/ARCHITECTURE.md)
+> Part of [Craton Shield Auto](../../README.md) | [Architecture](../../core/docs/architecture.md)
 
 UDS diagnostics gateway with SecurityAccess brute-force protection.
 
