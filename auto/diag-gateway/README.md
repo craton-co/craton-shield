@@ -55,13 +55,20 @@ All operations are logged to an internal audit ring buffer.
 
 ## Usage
 
-```rust
+```rust,ignore
 use vs_diag_gateway::{DiagGateway, UdsPolicy, DiagDecision};
-use vs_types::KeyId;
+use vs_crypto::KeyId; // KeyId is re-exported from vs-crypto, not vs-types
+
+// `crypto` is any type implementing `vs_crypto::CryptoProvider`. In tests
+// the `mock-hsm` feature of `vs-crypto` provides `SoftwareCryptoProvider`;
+// production deployments pass their HSM-backed provider.
+let crypto = make_crypto_provider();
 
 let mut policy = UdsPolicy::new();
 policy.allow_sid(0x22); // ReadDataByIdentifier — no auth required
 policy.require_auth_for_sid(0x31); // RoutineControl — auth required
+// `set_min_security_level` returns `Result` — it rejects SID 0x10/0x27.
+policy.set_min_security_level(0x22, 1).expect("0x22 accepts a min level");
 
 let mut gw = DiagGateway::new(
     crypto,
@@ -71,11 +78,14 @@ let mut gw = DiagGateway::new(
     KeyId(0),    // HMAC key slot — newtype-wrapped
 );
 
+// `tester_addr`, `sid`, `payload`, and `timestamp_us` come from the
+// transport layer (CAN / DoIP). `timestamp_us` must be a single monotonic
+// microsecond clock shared by all callers.
 let decision = gw.receive_uds_request(tester_addr, sid, &payload, timestamp_us);
 match decision {
     DiagDecision::Forward => { /* relay to target ECU */ }
-    DiagDecision::Block(reason) => { /* reject with NRC */ }
-    DiagDecision::Challenge(challenge) => { /* send seed to tester */ }
+    DiagDecision::Block(reason) => { /* reject with NRC reason.nrc() */ }
+    DiagDecision::Challenge(challenge) => { /* send challenge.seed to tester */ }
 }
 ```
 
