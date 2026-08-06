@@ -146,10 +146,10 @@ fn build_alert(
     }
 }
 
-/// Either reuse an existing payload digest or compute SHA-256 lazily,
-/// degrading the supplied subsystem on crypto failure.
+/// Compute the forensic SHA-256 payload digest, degrading the supplied
+/// subsystem status on crypto failure.
 ///
-/// The 9 alert-emission sites in this module previously open-coded the
+/// The alert-emission sites in this module previously open-coded the
 /// pattern:
 ///
 /// ```ignore
@@ -159,27 +159,23 @@ fn build_alert(
 /// }
 /// ```
 ///
-/// This helper folds that pattern into a single call and additionally
-/// accepts a pre-computed digest from the core CAN frame path (where
-/// [`vs_can_monitor::compute_can_payload_hash`] has already been run via
-/// SipHash, ~10× faster than SHA-256). When `provided` is `Some`, no
-/// crypto call is made and the supplied digest is returned unchanged.
+/// This helper folds that pattern into a single call. Every bus path
+/// (CAN, LIN, FlexRay, V2X, `DoIP`, OTA) routes through it so the embedded
+/// forensic fingerprint has uniform SHA-256 strength and `*status` tracks
+/// crypto health consistently across paths.
 ///
 /// # Returns
 ///
 /// The digest to embed in the [`SecurityAlert`]. On SHA-256 failure the
 /// digest is all-zeros and `*status` is set to [`SubsystemStatus::Degraded`]
 /// to surface the issue rather than silently producing a weak fingerprint.
+/// A subsequent successful call clears a prior `Degraded` status.
 #[inline]
 fn hash_or_degrade<C: CryptoProvider>(
     crypto: &C,
     data: &[u8],
-    provided: Option<&vs_types::PayloadHash>,
     status: &mut SubsystemStatus,
 ) -> vs_types::PayloadHash {
-    if let Some(h) = provided {
-        return *h;
-    }
     let mut hash_bytes = [0u8; 32];
     if crypto.sha256(data, &mut hash_bytes).is_err() {
         *status = SubsystemStatus::Degraded;
@@ -430,11 +426,13 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
 
     /// Submit a CAN frame for IDS inspection (core + signal-level).
     ///
-    /// Computes the forensic payload hash **once** using
-    /// [`vs_can_monitor::compute_can_payload_hash`] (SipHash, much cheaper
-    /// than SHA-256) and threads it into the signal-level alert builder
-    /// via `hash_or_degrade`, avoiding the duplicate per-frame SHA-256
-    /// flagged by the 2026-05 performance review (item 10).
+    /// On a signal-level anomaly, the forensic payload hash embedded in the
+    /// emitted [`SecurityAlert`] is a SHA-256 digest computed via the
+    /// platform `CryptoProvider`, matching every other bus path (LIN,
+    /// FlexRay, V2X, `DoIP`, OTA). This keeps forensic fingerprint strength
+    /// consistent across bus types and ensures `signal_ids_status` is
+    /// updated (and recovered) by the same crypto-health logic as the
+    /// other paths.
     pub fn submit_can_frame(&mut self, frame: &CanFrame, ts_us: u64) -> Result<(), VsError> {
         // Core IDS inspection.
         self.core.submit_can_frame(frame, ts_us)?;
@@ -442,16 +440,14 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
         // Signal-level anomaly detection.
         let result = self.signal_ids.process_frame(frame);
         if result.anomaly_count > 0 {
-            // Compute the payload digest once via SipHash (the same hash
-            // used by `CanMonitor::process_frame` on the core path) and
-            // thread it through `hash_or_degrade` so no SHA-256 fallback
-            // is needed for the common case.
+            // Compute the forensic digest with SHA-256 via `hash_or_degrade`
+            // (`provided = None`), identical to the LIN/FlexRay/DoIP/OTA
+            // paths. This yields a cryptographically strong fingerprint and
+            // lets `signal_ids_status` degrade/recover on crypto health.
             let payload_len = (frame.dlc as usize).min(64);
-            let can_digest = vs_can_monitor::compute_can_payload_hash(&frame.data, payload_len);
             let payload_hash = hash_or_degrade(
                 self.core.crypto(),
                 &frame.data[..payload_len],
-                Some(&can_digest),
                 &mut self.signal_ids_status,
             );
 
@@ -504,7 +500,6 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
                     let payload_hash = hash_or_degrade(
                         self.core.crypto(),
                         &pkt.payload[..hash_len],
-                        None,
                         &mut self.signal_ids_status,
                     );
 
@@ -628,7 +623,6 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
             let payload_hash = hash_or_degrade(
                 self.core.crypto(),
                 &msg.signer_public_key,
-                None,
                 &mut self.signal_ids_status,
             );
             let hash_bytes = payload_hash.0;
@@ -706,7 +700,6 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
             let payload_hash = hash_or_degrade(
                 self.core.crypto(),
                 &hash_input[..input_len],
-                None,
                 &mut self.signal_ids_status,
             );
             let alert = build_alert(
@@ -733,7 +726,6 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
             let payload_hash = hash_or_degrade(
                 self.core.crypto(),
                 payload,
-                None,
                 &mut self.signal_ids_status,
             );
             let source = ((frame_id as u64) << 32) | (result.anomaly_count as u64);
@@ -776,7 +768,6 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
             let payload_hash = hash_or_degrade(
                 self.core.crypto(),
                 &payload[..hash_len],
-                None,
                 &mut self.signal_ids_status,
             );
             let alert = build_alert(
@@ -804,7 +795,6 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
             let payload_hash = hash_or_degrade(
                 self.core.crypto(),
                 &payload[..hash_len],
-                None,
                 &mut self.signal_ids_status,
             );
             let source =
@@ -926,7 +916,6 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
                 let payload_hash = hash_or_degrade(
                     self.core.crypto(),
                     &manifest_data[..hash_len],
-                    None,
                     &mut self.signal_ids_status,
                 );
                 let alert = build_alert(
@@ -948,7 +937,6 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
                 let payload_hash = hash_or_degrade(
                     self.core.crypto(),
                     &manifest_data[..hash_len],
-                    None,
                     &mut self.signal_ids_status,
                 );
                 let alert = build_alert(
