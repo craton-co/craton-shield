@@ -100,6 +100,16 @@ fn mix_alert_id(ts: u64, source: u64, hash: u64) -> u64 {
     h
 }
 
+/// Returns `true` if `dlc` is a spec-legal CAN / CAN-FD data-length code.
+///
+/// Classic CAN allows payloads of 0-8 bytes. CAN-FD additionally permits
+/// 12, 16, 20, 24, 32, 48, and 64 bytes. Any other value is invalid and
+/// indicates a malformed frame that the bus could never carry.
+#[inline]
+fn is_valid_can_dlc(dlc: u8) -> bool {
+    matches!(dlc, 0..=8 | 12 | 16 | 20 | 24 | 32 | 48 | 64)
+}
+
 /// Encode a `FlexRay` slot ID and cycle counter into a single u32 source identifier.
 ///
 /// Layout: `[slot_id:11 bits][unused:13 bits][cycle:8 bits]`
@@ -434,6 +444,16 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
     /// updated (and recovered) by the same crypto-health logic as the
     /// other paths.
     pub fn submit_can_frame(&mut self, frame: &CanFrame, ts_us: u64) -> Result<(), VsError> {
+        // Validate the CAN/CAN-FD DLC before any payload slicing. `dlc`
+        // arrives from an untrusted bus; only the spec-legal data-length
+        // codes are accepted (classic CAN 0-8; CAN-FD additionally 12, 16,
+        // 20, 24, 32, 48, 64). A malformed length (e.g. 40) would otherwise
+        // hash a frame the bus could never carry. Mirrors the length
+        // validation performed by the LIN and FlexRay paths.
+        if !is_valid_can_dlc(frame.dlc) {
+            return Err(VsError::InvalidInput);
+        }
+
         // Core IDS inspection.
         self.core.submit_can_frame(frame, ts_us)?;
 
@@ -1149,6 +1169,29 @@ mod tests {
             };
             assert!(shield.submit_can_frame(&frame, 1_000).is_ok());
             assert!(shield.submit_can_frame(&frame, 2_000).is_ok());
+        });
+    }
+
+    #[test]
+    fn automotive_can_frame_invalid_dlc_rejected() {
+        big_stack(|| {
+            let mut shield = AutomotiveShield::init(default_config(), TestCrypto).unwrap();
+            add_allow_all_rule(&mut shield);
+            // DLC 40 is not a spec-legal CAN/CAN-FD data-length code.
+            let frame = CanFrame {
+                id: 0x100,
+                is_extended: false,
+                is_fd: true,
+                dlc: 40,
+                data: [0x01; 64],
+            };
+            assert_eq!(
+                shield.submit_can_frame(&frame, 1_000),
+                Err(VsError::InvalidInput)
+            );
+            // A CAN-FD-legal length (48) is accepted.
+            let ok_frame = CanFrame { dlc: 48, ..frame };
+            assert!(shield.submit_can_frame(&ok_frame, 2_000).is_ok());
         });
     }
 
