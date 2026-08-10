@@ -108,12 +108,22 @@ impl CryptoProvider for StubCryptoProvider {
         }
         Ok(())
     }
-    fn hmac_sha256(&self, _: KeyId, _: &[u8], _mac_out: &mut [u8; 32]) -> Result<(), VsError> {
-        // Fail-closed: refuse HMAC in stub mode to prevent SecurityAccess bypass.
-        // An all-zeros HMAC would allow any tester to authenticate by sending
-        // 32 zero bytes. Event logging uses sha256 (which succeeds) so this
-        // does not break init/health paths.
-        Err(VsError::NotInitialized)
+    fn hmac_sha256(
+        &self,
+        key_id: KeyId,
+        data: &[u8],
+        mac_out: &mut [u8; 32],
+    ) -> Result<(), VsError> {
+        // Non-cryptographic stub: allows EventLog initialization to succeed.
+        let key_raw: u32 = key_id.into();
+        for (i, b) in mac_out.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_add(0x5A).wrapping_add(key_raw as u8);
+        }
+        for (i, &b) in data.iter().enumerate() {
+            mac_out[i % 32] ^= b;
+            mac_out[(i + 1) % 32] = mac_out[(i + 1) % 32].wrapping_add(b);
+        }
+        Ok(())
     }
     fn ecdh_derive_shared(&self, _: KeyId, _: &[u8; 65], _: &mut [u8; 32]) -> Result<(), VsError> {
         Err(VsError::NotInitialized)

@@ -743,11 +743,8 @@ impl<C: CryptoProvider + Clone> AutomotiveShield<C> {
             .process_raw_frame(frame_id as u32, payload, payload.len());
         if result.anomaly_count > 0 {
             // TODO(perf): apply SipHash digest threading to LIN/FlexRay parity with CAN
-            let payload_hash = hash_or_degrade(
-                self.core.crypto(),
-                payload,
-                &mut self.signal_ids_status,
-            );
+            let payload_hash =
+                hash_or_degrade(self.core.crypto(), payload, &mut self.signal_ids_status);
             let source = ((frame_id as u64) << 32) | (result.anomaly_count as u64);
             let alert = build_alert(
                 ts_us,
