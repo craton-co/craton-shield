@@ -1089,8 +1089,7 @@ impl<C: CryptoProvider> V2xValidator<C> {
 
         buf[KEY_LEN..KEY_LEN + 8].copy_from_slice(&msg.generation_time_us.to_le_bytes());
         buf[KEY_LEN + 8..KEY_LEN + 12].copy_from_slice(&msg.payload.latitude_udeg.to_le_bytes());
-        buf[KEY_LEN + 12..KEY_LEN + 16]
-            .copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
+        buf[KEY_LEN + 12..KEY_LEN + 16].copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
         buf[KEY_LEN + 16..KEY_LEN + 20].copy_from_slice(&msg.payload.speed_cm_s.to_le_bytes());
         buf[KEY_LEN + 20..KEY_LEN + 22].copy_from_slice(&msg.payload.heading_cdeg.to_le_bytes());
         buf[KEY_LEN + 22..KEY_LEN + 24].copy_from_slice(&(clamped_len as u16).to_le_bytes());
@@ -2314,8 +2313,7 @@ mod tests {
         buf[0..KEY_LEN].copy_from_slice(&msg.signer_public_key);
         buf[KEY_LEN..KEY_LEN + 8].copy_from_slice(&msg.generation_time_us.to_le_bytes());
         buf[KEY_LEN + 8..KEY_LEN + 12].copy_from_slice(&msg.payload.latitude_udeg.to_le_bytes());
-        buf[KEY_LEN + 12..KEY_LEN + 16]
-            .copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
+        buf[KEY_LEN + 12..KEY_LEN + 16].copy_from_slice(&msg.payload.longitude_udeg.to_le_bytes());
         buf[KEY_LEN + 16..KEY_LEN + 20].copy_from_slice(&msg.payload.speed_cm_s.to_le_bytes());
         buf[KEY_LEN + 20..KEY_LEN + 22].copy_from_slice(&msg.payload.heading_cdeg.to_le_bytes());
         buf[KEY_LEN + 22..KEY_LEN + 24].copy_from_slice(&(clamped_len as u16).to_le_bytes());

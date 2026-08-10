@@ -64,10 +64,10 @@ echo "Repository: ${REPO_ROOT}"
 echo "Cargo target dir (container): ${DOCKER_CARGO_TARGET_DIR_CONTAINER}"
 echo ""
 
-# Only request an interactive TTY when one is actually available.
+# Only request a pseudo-TTY when output is interactive.
 DOCKER_TTY_FLAGS=()
-if [[ -t 0 && -t 1 ]]; then
-    DOCKER_TTY_FLAGS=(-it)
+if [[ -t 1 ]]; then
+    DOCKER_TTY_FLAGS=(-t)
 fi
 
 # Robustly separate options and specific jobs from the arguments.
@@ -131,12 +131,14 @@ else
     OTHER_JOBS=("fmt" "clippy" "thumbv7em" "doc" "audit" "deny" "msrv")
 fi
 
-OTHER_FAILED=false
+PID_OTHER=""
+PID_TEST=""
+
 if [ ${#OTHER_JOBS[@]} -gt 0 ]; then
     echo "============================================================================="
-    echo "Container 1: Running check & lint jobs (${OTHER_JOBS[*]})"
+    echo "Container 1 (Other jobs): Running check & lint jobs (${OTHER_JOBS[*]})"
     echo "============================================================================="
-    if ! docker run --rm "${DOCKER_TTY_FLAGS[@]}" \
+    docker run --rm "${DOCKER_TTY_FLAGS[@]}" \
         -e RUST_BACKTRACE=1 \
         -e CARGO_TERM_COLOR=always \
         -e "CARGO_TARGET_DIR=${DOCKER_CARGO_TARGET_DIR_CONTAINER}" \
@@ -146,18 +148,15 @@ if [ ${#OTHER_JOBS[@]} -gt 0 ]; then
         -v "${REPO_ROOT}/target:/work/target" \
         -w /work \
         "${DOCKER_IMAGE}" \
-        bash -c './scripts/local-ci.sh "$@"' _ "${OPTIONS[@]}" "${OTHER_JOBS[@]}"; then
-        OTHER_FAILED=true
-    fi
-    echo ""
+        bash -c './scripts/local-ci.sh "$@"' _ "${OPTIONS[@]}" "${OTHER_JOBS[@]}" &
+    PID_OTHER=$!
 fi
 
-TEST_FAILED=false
 if [ ${#TEST_JOBS[@]} -gt 0 ]; then
     echo "============================================================================="
-    echo "Container 2: Running test jobs (${TEST_JOBS[*]})"
+    echo "Container 2 (Test jobs): Running test jobs (${TEST_JOBS[*]})"
     echo "============================================================================="
-    if ! docker run --rm "${DOCKER_TTY_FLAGS[@]}" \
+    docker run --rm "${DOCKER_TTY_FLAGS[@]}" \
         -e RUST_BACKTRACE=1 \
         -e CARGO_TERM_COLOR=always \
         -e "CARGO_TARGET_DIR=${DOCKER_CARGO_TARGET_DIR_CONTAINER}" \
@@ -167,10 +166,23 @@ if [ ${#TEST_JOBS[@]} -gt 0 ]; then
         -v "${REPO_ROOT}/target:/work/target" \
         -w /work \
         "${DOCKER_IMAGE}" \
-        bash -c './scripts/local-ci.sh "$@"' _ "${OPTIONS[@]}" "${TEST_JOBS[@]}"; then
+        bash -c './scripts/local-ci.sh "$@"' _ "${OPTIONS[@]}" "${TEST_JOBS[@]}" &
+    PID_TEST=$!
+fi
+
+OTHER_FAILED=false
+TEST_FAILED=false
+
+if [ -n "$PID_OTHER" ]; then
+    if ! wait "$PID_OTHER"; then
+        OTHER_FAILED=true
+    fi
+fi
+
+if [ -n "$PID_TEST" ]; then
+    if ! wait "$PID_TEST"; then
         TEST_FAILED=true
     fi
-    echo ""
 fi
 
 if [ "$OTHER_FAILED" = true ] || [ "$TEST_FAILED" = true ]; then

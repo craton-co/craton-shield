@@ -202,7 +202,7 @@ pub struct DiagSession {
     /// This is `0` until [`DiagGateway::receive_uds_request`] processes a
     /// valid key (SID 0x27, even sub-function) whose MAC matches. A bare
     /// seed *request* does **not** raise this value — see
-    /// [`Self::pending_security_level`]. Per-SID `min_security_levels`
+    /// `pending_security_level`. Per-SID `min_security_levels`
     /// gating is evaluated against this achieved level only.
     pub security_level: u8,
     /// Security level **requested** by the most recent `SecurityAccess` seed
@@ -811,7 +811,7 @@ impl<C: CryptoProvider> DiagGateway<C> {
     /// therefore be evaded by an attacker that rotates the source address.
     /// To close that gap, `SecurityAccess` brute-force protection is also
     /// enforced *globally*, independent of `tester_addr`: a gateway-wide
-    /// seed-request rate limit ([`MIN_SEED_INTERVAL_US`]) and a gateway-wide
+    /// seed-request rate limit (`MIN_SEED_INTERVAL_US`) and a gateway-wide
     /// failure budget that triggers a global `SecurityAccess` lockout (see
     /// [`Self::is_globally_locked_out`]). Address-based tracking remains as
     /// a precise first line of defence; the global limits are the backstop.
@@ -1653,8 +1653,7 @@ impl<C: CryptoProvider> DiagGateway<C> {
     fn record_global_failure(&mut self, ts_us: u64) {
         // Start a fresh window if the previous one has fully elapsed.
         if self.global_failure_count == 0
-            || ts_us.saturating_sub(self.global_failure_window_start_us)
-                >= self.lockout_duration_us
+            || ts_us.saturating_sub(self.global_failure_window_start_us) >= self.lockout_duration_us
         {
             self.global_failure_window_start_us = ts_us;
             self.global_failure_count = 0;
@@ -2344,7 +2343,10 @@ mod tests {
         // Drive LOCKOUT_THRESHOLD malformed (too-short) key submissions.
         for _ in 0..LOCKOUT_THRESHOLD {
             let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &[SA_REQUEST_SEED], ts);
-            assert!(matches!(d, DiagDecision::Challenge(_)), "expected challenge");
+            assert!(
+                matches!(d, DiagDecision::Challenge(_)),
+                "expected challenge"
+            );
 
             // Key send with a short (16-byte) key — must be rejected AND tracked.
             let mut payload = [0u8; 17];
@@ -2384,7 +2386,7 @@ mod tests {
             .expect("hmac");
         let mut payload = [0u8; SA_SEND_KEY_PAYLOAD_LEN + 4];
         payload[0] = SA_SEND_KEY;
-        payload[1..1 + 32].copy_from_slice(&key);
+        payload[1..=32].copy_from_slice(&key);
         let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &payload, 1_000_001);
         assert_eq!(
             d,
@@ -2426,7 +2428,9 @@ mod tests {
         // so a 0x22 request must be rejected with SecurityAccessDenied (NRC 0x33).
         let mut policy = UdsPolicy::new();
         policy.allow_sid(0x22);
-        policy.set_min_security_level(0x22, 2).expect("0x22 accepts a min level");
+        policy
+            .set_min_security_level(0x22, 2)
+            .expect("0x22 accepts a min level");
 
         let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0F80;
@@ -2452,14 +2456,19 @@ mod tests {
         // per-SID `min_security_levels` gate without ever sending a key.
         let mut policy = UdsPolicy::new();
         policy.allow_sid(0x22);
-        policy.set_min_security_level(0x22, 2).expect("0x22 accepts a min level");
+        policy
+            .set_min_security_level(0x22, 2)
+            .expect("0x22 accepts a min level");
 
         let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0F70;
 
         // Request a level-2 seed (sub-function 0x03) but never send a key.
         let d = gw.receive_uds_request(tester, SID_SECURITY_ACCESS, &[0x03], 1_000_000);
-        assert!(matches!(d, DiagDecision::Challenge(_)), "expected challenge");
+        assert!(
+            matches!(d, DiagDecision::Challenge(_)),
+            "expected challenge"
+        );
 
         // The achieved security level must still be 0 — only a requested level
         // was recorded.
@@ -2485,7 +2494,9 @@ mod tests {
         // request is forwarded.
         let mut policy = UdsPolicy::new();
         policy.allow_sid(0x22);
-        policy.set_min_security_level(0x22, 2).expect("0x22 accepts a min level");
+        policy
+            .set_min_security_level(0x22, 2)
+            .expect("0x22 accepts a min level");
 
         let mut gw = DiagGateway::new(make_crypto(), policy, 5_000_000, 10_000_000, KeyId(0));
         let tester = 0x0F81;
