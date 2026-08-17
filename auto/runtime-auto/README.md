@@ -21,9 +21,15 @@ diagnostic gateway protection.
 
 - `capacity-large` — increases internal buffer sizes (forwarded to `vs-runtime`)
 - `capacity-xl` — further increases internal buffer sizes (forwarded to `vs-runtime`)
-- `heap-subsystems` — allocates subsystems (`SignalIdsEngine`, `V2xValidator`, `DiagGateway`)
-  on the heap via `Box` instead of inline in `AutomotiveShield`. Requires `std`. Use this on
-  Linux/QNX gateway ECUs to avoid the large default stack usage of `AutomotiveShield`.
+- `heap-subsystems` — heap-allocates the `V2xValidator` and `DiagGateway` subsystems
+  via `Box` instead of storing them inline in `AutomotiveShield` (the `SignalIdsEngine`
+  remains inline). Requires `std`. Use this on Linux/QNX gateway ECUs to avoid the large
+  default stack usage of `AutomotiveShield`.
+- `mix-shift-xor` — uses shift-XOR alert-ID mixing instead of 64-bit multiplications,
+  for targets without a hardware multiply (e.g. Cortex-M0/M0+).
+- `pq` — pulls in the post-quantum crypto stack (ML-KEM-768 + ML-DSA-65) via
+  `vs-crypto/pq` and `vs-runtime/pq`.
+- `stub` — build-only convenience feature for stub/test configurations.
 
 > Note: The crate's `cargo test` suite spawns helper threads with an 8 MiB stack to
 > accommodate `AutomotiveShield`'s inline subsystems on the test runner; this is a
@@ -32,7 +38,7 @@ diagnostic gateway protection.
 > in the `AutomotiveShield` value, which callers typically place in a `static` or
 > on a dedicated task stack).
 
-See [core/docs/feature-flags.md](../../core/docs/feature-flags.md) for the full workspace feature reference.
+See [docs/feature-flags.md](../../docs/feature-flags.md) for the full workspace feature reference.
 
 ## Usage
 
