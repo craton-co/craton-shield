@@ -23,12 +23,11 @@
 //! suite spawns helper threads with an 8 MiB stack purely as a test-runner
 //! convenience.
 //!
-//! # Public API (v1.0 stable)
+//! # Public API
 //!
 //! The `AutomotiveShield` orchestrator, the `OtaSignatureVerifier` trait,
-//! and the `AutomotiveConfig` builder form the v1.0 stable surface and
-//! are governed by `DEPRECATION.md`. The deprecated `NoOpOtaSigner` stub
-//! was removed in v1.0.0.
+//! and the `AutomotiveConfig` builder form the public surface of this
+//! crate. The deprecated `NoOpOtaSigner` stub was removed in 0.7.1.
 
 #![cfg_attr(not(feature = "heap-subsystems"), no_std)]
 #![deny(missing_docs)]
@@ -279,7 +278,7 @@ pub trait OtaSignatureVerifier {
     }
 }
 
-// NoOpOtaSigner was removed in v1.0.0 (deprecated since v0.8.0). The
+// NoOpOtaSigner was removed in 0.7.1 (deprecated since 0.7.0). The
 // `OtaSignatureVerifier` trait already provides a fail-closed default
 // implementation, so tests and stub builds can use any unit struct that
 // implements the trait without overriding `verify_ota_signature`.
