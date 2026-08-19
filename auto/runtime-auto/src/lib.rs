@@ -3,7 +3,7 @@
 
 //! Automotive runtime orchestrator integrating signal IDS, V2X, and diagnostics.
 //!
-//! Wraps `CratonShield` from craton-shield-core with automotive-specific subsystems
+//! Wraps `CratonShield` from the `vs-runtime` crate with automotive-specific subsystems
 //! for CAN/LIN/FlexRay frame submission, V2X message validation, OTA manifest
 //! verification, and `DoIP` header inspection.
 //!
