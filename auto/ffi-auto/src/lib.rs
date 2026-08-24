@@ -997,8 +997,12 @@ pub extern "C" fn vs_auto_is_stub_initialized() -> bool {
 /// platform writer lock. This is the historic behaviour and the only mode
 /// guaranteed by the `AutomotiveShield` API today (its `submit_*` methods
 /// take `&mut self`).
-#[no_mangle]
-pub static VS_LOCK_STRATEGY_GLOBAL: u32 = 0;
+///
+/// This constant mirrors the `#define VS_LOCK_STRATEGY_GLOBAL` in
+/// `vs_auto.h`. It is a compile-time `const` (not an exported data symbol):
+/// C consumers reference the header `#define`, and the value is passed to
+/// [`vs_auto_set_lock_strategy`] by value, so no linked symbol is required.
+pub const VS_LOCK_STRATEGY_GLOBAL: u32 = 0;
 
 /// Opt-in lock strategy: per-subsystem locks. Currently behaves identically
 /// to [`VS_LOCK_STRATEGY_GLOBAL`] but flags the caller's intent so the FFI
@@ -1010,8 +1014,10 @@ pub static VS_LOCK_STRATEGY_GLOBAL: u32 = 0;
 /// total ingress order. Most automotive gateways meet this requirement
 /// because per-subsystem ordering is preserved by the rate-limiter mutexes
 /// already in place.
-#[no_mangle]
-pub static VS_LOCK_STRATEGY_PER_SUBSYSTEM: u32 = 1;
+///
+/// This constant mirrors the `#define VS_LOCK_STRATEGY_PER_SUBSYSTEM` in
+/// `vs_auto.h`. It is a compile-time `const` (not an exported data symbol).
+pub const VS_LOCK_STRATEGY_PER_SUBSYSTEM: u32 = 1;
 
 /// Tracks the active lock strategy. Read by every `submit_*` entry point
 /// (a single relaxed atomic load — far cheaper than acquiring the lock).
