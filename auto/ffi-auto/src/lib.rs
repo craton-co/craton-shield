@@ -1280,7 +1280,15 @@ pub unsafe extern "C" fn vs_auto_platform_init_with_crypto(
 ///
 /// # Safety
 ///
-/// `frame` must point to a valid `VsCanFrame`.
+/// `frame` must point to a fully initialized, properly aligned `VsCanFrame`.
+/// This function constructs a `&VsCanFrame` reference, which asserts that
+/// **every byte** of the `#[repr(C)]` struct — including all trailing array
+/// elements (the full `data` buffer regardless of `dlc`) and any padding —
+/// is initialized to a valid value. Passing a struct where only the leading
+/// fields or only the first `dlc` data bytes were written is undefined
+/// behavior, even though this function never reads past `dlc`. C callers
+/// should zero-initialize the whole struct (e.g. `VsCanFrame f = {0};`)
+/// before populating it.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn vs_auto_submit_can_frame(frame: *const VsCanFrame) -> VsResult {
@@ -1356,7 +1364,13 @@ pub unsafe extern "C" fn vs_auto_submit_can_frame(frame: *const VsCanFrame) -> V
 ///
 /// # Safety
 ///
-/// `packet` must point to a valid `VsEthPacket`.
+/// `packet` must point to a fully initialized, properly aligned
+/// `VsEthPacket`. Constructing the `&VsEthPacket` reference asserts that
+/// **every byte** of the `#[repr(C)]` struct — including the entire
+/// `payload` buffer regardless of `payload_len`, the `padding` field, and
+/// any compiler padding — is initialized. Passing a struct where only the
+/// first `payload_len` payload bytes were written is undefined behavior.
+/// C callers should zero-initialize the whole struct before use.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn vs_auto_submit_eth_packet(packet: *const VsEthPacket) -> VsResult {
@@ -1618,7 +1632,13 @@ pub struct VsOtaManifest {
 ///
 /// # Safety
 ///
-/// `frame` must point to a valid `VsLinFrame`.
+/// `frame` must point to a fully initialized, properly aligned `VsLinFrame`.
+/// Constructing the `&VsLinFrame` reference asserts that **every byte** of
+/// the `#[repr(C)]` struct — including the entire `payload` buffer
+/// regardless of `payload_len` and any padding — is initialized. Passing a
+/// struct where only the first `payload_len` payload bytes were written is
+/// undefined behavior. C callers should zero-initialize the whole struct
+/// before use.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn vs_auto_submit_lin_frame(frame: *const VsLinFrame) -> VsResult {
@@ -1670,7 +1690,13 @@ pub unsafe extern "C" fn vs_auto_submit_lin_frame(frame: *const VsLinFrame) -> V
 ///
 /// # Safety
 ///
-/// `frame` must point to a valid `VsFlexRayFrame`.
+/// `frame` must point to a fully initialized, properly aligned
+/// `VsFlexRayFrame`. Constructing the `&VsFlexRayFrame` reference asserts
+/// that **every byte** of the `#[repr(C)]` struct — including the entire
+/// `payload` buffer regardless of `payload_len` and any padding — is
+/// initialized. Passing a struct where only the first `payload_len` payload
+/// bytes were written is undefined behavior. C callers should
+/// zero-initialize the whole struct before use.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn vs_auto_submit_flexray_frame(frame: *const VsFlexRayFrame) -> VsResult {
@@ -1732,8 +1758,17 @@ pub unsafe extern "C" fn vs_auto_submit_flexray_frame(frame: *const VsFlexRayFra
 ///
 /// # Safety
 ///
-/// `request` must point to a valid `VsUdsRequest`.
-/// `decision_out` must point to a valid, writable `VsUdsDecision`.
+/// `request` must point to a fully initialized, properly aligned
+/// `VsUdsRequest`. Constructing the `&VsUdsRequest` reference asserts that
+/// **every byte** of the `#[repr(C)]` struct — including the entire
+/// `payload` buffer regardless of `payload_len` and any padding — is
+/// initialized. Passing a struct where only the first `payload_len` payload
+/// bytes were written is undefined behavior. C callers should
+/// zero-initialize the whole struct before use.
+///
+/// `decision_out` must point to properly aligned, writable storage of at
+/// least `sizeof(VsUdsDecision)` bytes; it need not be initialized (the
+/// function writes the whole struct via `ptr::write`).
 #[no_mangle]
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn vs_auto_uds_request(
@@ -1829,7 +1864,15 @@ pub unsafe extern "C" fn vs_auto_uds_request(
 ///
 /// # Safety
 ///
-/// `manifest` must point to a valid `VsOtaManifest`.
+/// `manifest` must point to a fully initialized, properly aligned
+/// `VsOtaManifest`. Constructing the `&VsOtaManifest` reference asserts
+/// that **every byte** of the ~4 KiB `#[repr(C)]` struct — including the
+/// entire `data` buffer regardless of `data_len`, the `expected_hash`
+/// array, and any padding — is initialized. Passing a struct where only
+/// `data_len` and the first `data_len` data bytes were written is
+/// undefined behavior, even though this function hashes only the first
+/// `data_len` bytes. C callers should zero-initialize the whole struct
+/// (e.g. `VsOtaManifest m = {0};`) before populating it.
 #[no_mangle]
 #[allow(unsafe_code)]
 pub unsafe extern "C" fn vs_auto_validate_ota_manifest(manifest: *const VsOtaManifest) -> VsResult {
