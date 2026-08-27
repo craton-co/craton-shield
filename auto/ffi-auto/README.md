@@ -53,6 +53,11 @@ with a `VsCryptoCallbacks` struct that provides real cryptographic operations
 #include "vs_auto.h"
 
 static VsCryptoCallbacks my_callbacks = {
+    // Mandatory ABI canaries — the init function rejects the struct with
+    // VS_ERR_INVALID_ARG unless BOTH of these are set exactly as shown.
+    .magic                 = VS_CRYPTO_CALLBACKS_MAGIC,
+    .crypto_callbacks_size = sizeof(VsCryptoCallbacks),
+
     .context       = &my_hsm_driver,
     .sha256        = my_sha256,
     .hmac_sha256   = my_hmac_sha256,
@@ -62,6 +67,10 @@ static VsCryptoCallbacks my_callbacks = {
 
 VsResult r = vs_auto_platform_init_with_crypto(&my_callbacks);
 ```
+
+`magic` and `crypto_callbacks_size` are not optional: `vs_auto_platform_init_with_crypto`
+validates both before dispatching through any callback and returns
+`VS_ERR_INVALID_ARG` if either is missing or wrong.
 
 In non-production builds, `vs_auto_platform_init()` (no arguments) uses a stub
 provider suitable for testing only.
