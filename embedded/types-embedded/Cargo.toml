@@ -13,6 +13,10 @@ readme = "README.md"
 
 [dependencies]
 vs-types.workspace = true
+# Genuine constant-time equality primitives. `subtle` is `no_std` by default
+# (its `std` feature is opt-in) and provides branchless `ConstantTimeEq`,
+# replacing the previous `black_box(diff) == 0` pattern in the `ct_*` helpers.
+subtle = { version = "2.6", default-features = false }
 
 [features]
 default = []
