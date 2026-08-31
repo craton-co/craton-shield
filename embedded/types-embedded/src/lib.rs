@@ -21,6 +21,8 @@
 // `ModbusException`, `ConfigChangeType`, and `TrustCenterEvent` are
 // pinned and form part of the stable ABI for embedded FFI consumers.
 
+use subtle::{Choice, ConstantTimeEq};
+
 /// Re-export of the base [`vs_types`] crate.
 ///
 /// Provided so downstream consumers can access the core types (e.g.
@@ -1339,11 +1341,16 @@ pub fn compute_payload_hash(data: &[u8]) -> vs_types::PayloadHash {
 /// Returns `true` if all bytes match. Runs in constant time regardless of
 /// where the first difference occurs, preventing timing side-channels.
 ///
-/// Uses `core::hint::black_box` to prevent the compiler from optimizing
-/// the accumulator pattern into a short-circuiting comparison under LTO.
-/// The final equality check uses bitwise subtraction-to-zero (`wrapping_sub(1)`)
-/// and a right-shift to produce the boolean result without branching, avoiding
-/// microarchitectural timing leaks from branch prediction on the final `== 0`.
+/// The comparison is delegated to [`subtle::ConstantTimeEq`], the audited,
+/// purpose-built constant-time equality primitive. Unlike the previous
+/// `black_box(diff) == 0` pattern, the accumulation *and* the final
+/// boolean materialization are branchless: `subtle` produces a
+/// [`subtle::Choice`] and converts it to `bool` without a data-dependent
+/// branch on the comparison result.
+///
+/// For callers that must remain branchless end-to-end (i.e. avoid branching
+/// on the returned `bool`), use [`ct_mac_eq_choice`], which returns the
+/// raw [`subtle::Choice`].
 ///
 /// # Verification
 ///
@@ -1351,55 +1358,77 @@ pub fn compute_payload_hash(data: &[u8]) -> vs_types::PayloadHash {
 /// timing analysis tools such as [`dudect`](https://crates.io/crates/dudect-bencher)
 /// or `ctgrind` on your specific target architecture and toolchain.
 #[inline]
-#[allow(clippy::arithmetic_side_effects)]
 pub fn ct_mac_eq(a: &[u8; 6], b: &[u8; 6]) -> bool {
-    let mut diff: u8 = 0;
-    let mut i = 0;
-    while i < 6 {
-        diff |= a[i] ^ b[i];
-        i += 1;
-    }
-    // Convert diff==0 to bool without branching:
-    // If diff==0: wrapping_sub(1) = 0xFF, >> 7 = 1 (negated to 0, then XOR 1 = 1)
-    // If diff!=0: wrapping_sub(1) has bit 7 possibly clear... instead use simpler approach:
-    // black_box prevents optimization; the == 0 is a single-instruction comparison on ARM/x86.
-    // Wrap the entire result in black_box to prevent branch prediction optimization.
-    core::hint::black_box(core::hint::black_box(diff) == 0)
+    ct_mac_eq_choice(a, b).into()
+}
+
+/// Constant-time comparison of two 6-byte MAC addresses, returning a
+/// [`subtle::Choice`].
+///
+/// Prefer this over [`ct_mac_eq`] when the result feeds further constant-time
+/// logic, because [`subtle::Choice`] cannot be branched on directly and so
+/// keeps the whole computation free of data-dependent branches.
+#[inline]
+#[must_use]
+pub fn ct_mac_eq_choice(a: &[u8; 6], b: &[u8; 6]) -> subtle::Choice {
+    a.ct_eq(b)
 }
 
 /// Constant-time comparison for 4-byte addresses (e.g. `LoRa` device addresses).
 ///
-/// Prevents timing side-channel attacks by always comparing all bytes.
-/// See [`ct_mac_eq`] for detailed timing analysis notes.
+/// Prevents timing side-channel attacks by always comparing all bytes via
+/// [`subtle::ConstantTimeEq`]. See [`ct_mac_eq`] for detailed notes; use
+/// [`ct_addr4_eq_choice`] for a branchless [`subtle::Choice`] result.
 #[inline]
-#[allow(clippy::arithmetic_side_effects)]
 pub fn ct_addr4_eq(a: &[u8; 4], b: &[u8; 4]) -> bool {
-    let mut acc: u8 = 0;
-    let mut i = 0;
-    while i < 4 {
-        acc |= a[i] ^ b[i];
-        i += 1;
-    }
-    core::hint::black_box(core::hint::black_box(acc) == 0)
+    ct_addr4_eq_choice(a, b).into()
+}
+
+/// Constant-time comparison for 4-byte addresses, returning a [`subtle::Choice`].
+///
+/// See [`ct_mac_eq_choice`] for when to prefer this over [`ct_addr4_eq`].
+#[inline]
+#[must_use]
+pub fn ct_addr4_eq_choice(a: &[u8; 4], b: &[u8; 4]) -> subtle::Choice {
+    a.ct_eq(b)
 }
 
 /// Constant-time comparison for single-byte values (e.g. Modbus unit IDs).
 ///
-/// Prevents timing side-channel attacks by using `black_box` to inhibit
-/// compiler short-circuit optimisations.
-/// See [`ct_mac_eq`] for detailed timing analysis notes.
+/// Prevents timing side-channel attacks by delegating to
+/// [`subtle::ConstantTimeEq`]. See [`ct_mac_eq`] for detailed notes; use
+/// [`ct_u8_eq_choice`] for a branchless [`subtle::Choice`] result.
 #[inline]
 pub fn ct_u8_eq(a: u8, b: u8) -> bool {
-    core::hint::black_box(core::hint::black_box(a ^ b) == 0)
+    ct_u8_eq_choice(a, b).into()
+}
+
+/// Constant-time comparison for single-byte values, returning a [`subtle::Choice`].
+///
+/// See [`ct_mac_eq_choice`] for when to prefer this over [`ct_u8_eq`].
+#[inline]
+#[must_use]
+pub fn ct_u8_eq_choice(a: u8, b: u8) -> subtle::Choice {
+    a.ct_eq(&b)
 }
 
 /// Constant-time comparison for 2-byte values (e.g. Zigbee short addresses).
 ///
-/// Prevents timing side-channel attacks by always comparing both bytes.
-/// See [`ct_mac_eq`] for detailed timing analysis notes.
+/// Prevents timing side-channel attacks by delegating to
+/// [`subtle::ConstantTimeEq`]. See [`ct_mac_eq`] for detailed notes; use
+/// [`ct_u16_eq_choice`] for a branchless [`subtle::Choice`] result.
 #[inline]
 pub fn ct_u16_eq(a: u16, b: u16) -> bool {
-    core::hint::black_box(core::hint::black_box(a ^ b) == 0)
+    ct_u16_eq_choice(a, b).into()
+}
+
+/// Constant-time comparison for 2-byte values, returning a [`subtle::Choice`].
+///
+/// See [`ct_mac_eq_choice`] for when to prefer this over [`ct_u16_eq`].
+#[inline]
+#[must_use]
+pub fn ct_u16_eq_choice(a: u16, b: u16) -> subtle::Choice {
+    a.ct_eq(&b)
 }
 
 // ---------------------------------------------------------------------------
@@ -2164,17 +2193,17 @@ impl ModbusIpFilter {
             u32::MAX << (32 - mask_bits)
         };
 
-        let filter_u32 = u32::from_be_bytes(filter_bytes);
-        let addr_u32 = u32::from_be_bytes(*addr);
-        let diff = (filter_u32 & mask) ^ (addr_u32 & mask);
+        let filter_u32 = u32::from_be_bytes(filter_bytes) & mask;
+        let addr_u32 = u32::from_be_bytes(*addr) & mask;
 
-        // `black_box` prevents the optimizer from short-circuiting the
-        // accumulator or hoisting the equality check above the active/family
-        // gates.
-        let masked_eq = core::hint::black_box(diff) == 0;
-        core::hint::black_box(masked_eq)
-            & core::hint::black_box(self.active)
-            & core::hint::black_box(family_ok)
+        // `subtle::ConstantTimeEq` produces a branchless `Choice`; AND-ing it
+        // with the `active`/`family_ok` gates (also as `Choice`) keeps the
+        // whole result free of data-dependent branches. The final `bool`
+        // conversion is `subtle`'s constant-time materialization.
+        let masked_eq = filter_u32.ct_eq(&addr_u32);
+        let active = Choice::from(u8::from(self.active));
+        let family = Choice::from(u8::from(family_ok));
+        (masked_eq & active & family).into()
     }
 
     /// Check if an IPv6 address matches this filter.
@@ -2233,12 +2262,14 @@ impl ModbusIpFilter {
             i += 1;
         }
 
-        // `black_box` prevents the optimizer from short-circuiting the
-        // accumulator or hoisting the equality check above the gates.
-        let bytes_eq = core::hint::black_box(diff) == 0;
-        core::hint::black_box(bytes_eq)
-            & core::hint::black_box(self.active)
-            & core::hint::black_box(family_ok)
+        // `subtle::ConstantTimeEq` produces a branchless `Choice`; AND-ing it
+        // with the `active`/`family_ok` gates (also as `Choice`) keeps the
+        // whole result free of data-dependent branches. The final `bool`
+        // conversion is `subtle`'s constant-time materialization.
+        let bytes_eq = diff.ct_eq(&0u8);
+        let active = Choice::from(u8::from(self.active));
+        let family = Choice::from(u8::from(family_ok));
+        (bytes_eq & active & family).into()
     }
 
     /// Check if an [`IpAddress`] matches this filter.
