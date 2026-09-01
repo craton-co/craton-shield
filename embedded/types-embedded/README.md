@@ -25,7 +25,7 @@ due to their large size (656 and 408 bytes respectively). Use references
 - `ZigbeeFrame` — IEEE 802.15.4 frame with source/destination addresses, PAN IDs, frame type, and security counter.
 - `ZigbeeFrameType` — Zigbee frame types (Beacon, Data, Ack, Command).
 - `LoraMessage` — LoRaWAN message with device address, frame counter, message type, data rate, and airtime.
-- `LoraMessageType` — LoRa message types (JoinRequest, JoinAccept, UnconfirmedDataUp, ConfirmedDataUp, etc.).
+- `LoraMessageType` — LoRa message types (JoinRequest, JoinAccept, UnconfirmedUp, UnconfirmedDown, ConfirmedUp, ConfirmedDown, etc.).
 - `ModbusRtuMessage` — Modbus RTU message with unit ID, function code, register address, and quantity.
 - `ModbusTcpMessage` — Modbus TCP message wrapping RTU with source IP address.
 - `ModbusIpFilter` — IP prefix filter for Modbus TCP source address filtering.
