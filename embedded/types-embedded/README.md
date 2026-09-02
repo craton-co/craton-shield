@@ -49,8 +49,7 @@ Source-type constants for the embedded/IoT range (20-29):
 ## Usage
 
 ```rust
-use vs_types_embedded::{DeviceId, MqttMessage, MqttPacketType, MqttQoS};
-use vs_types_embedded::{CoapMessage, CoapMethod, BleEvent, BleEventType};
+use vs_types_embedded::{DeviceId, MqttMessage};
 
 // Create a device ID from a MAC address.
 let device = DeviceId::from_mac([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
