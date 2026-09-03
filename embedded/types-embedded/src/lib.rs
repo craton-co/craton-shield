@@ -15,7 +15,7 @@
 // ---------------------------------------------------------------------------
 //
 // Every `pub` item below is part of the v1.0 stable surface and governed
-// by `DEPRECATION.md`. Enum discriminants on `MqttPacketType`, `MqttQoS`,
+// by the workspace deprecation policy. Enum discriminants on `MqttPacketType`, `MqttQoS`,
 // `CoapMethod`, `CoapMessageType`, `BleEventType`, `BleAddressType`,
 // `ZigbeeFrameType`, `LoraMessageType`, `ModbusFunction`,
 // `ModbusException`, `ConfigChangeType`, and `TrustCenterEvent` are
