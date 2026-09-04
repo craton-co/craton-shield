@@ -4,7 +4,7 @@
   "version": 1,
   "serialNumber": "urn:uuid:0fea87ab-5232-4b4a-ae3f-203a3554f15b",
   "metadata": {
-    "timestamp": "2026-04-01T01:04:29.065507760Z",
+    "timestamp": "2026-05-21T00:00:00.000000000Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -14,7 +14,7 @@
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0",
+      "bom-ref": "path+file:///workspace/craton-shield/embedded/types-embedded#vs-types-embedded@0.7.0",
       "name": "vs-types-embedded",
       "version": "0.7.0",
       "description": "IoT/embedded type extensions for Craton Shield",
@@ -28,17 +28,17 @@
       "externalReferences": [
         {
           "type": "website",
-          "url": "https://github.com/craton-co/craton-shield-embedded"
+          "url": "https://github.com/craton-co/craton-shield"
         },
         {
           "type": "vcs",
-          "url": "https://github.com/craton-co/craton-shield-embedded"
+          "url": "https://github.com/craton-co/craton-shield"
         }
       ],
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0 bin-target-0",
+          "bom-ref": "path+file:///workspace/craton-shield/embedded/types-embedded#vs-types-embedded@0.7.0 lib-target-0",
           "name": "vs_types_embedded",
           "version": "0.7.0",
           "purl": "pkg:cargo/vs-types-embedded@0.7.0?download_url=file://.#src/lib.rs"
@@ -55,9 +55,9 @@
   "components": [
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield/core/types#vs-types@0.7.0",
       "name": "vs-types",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Core types, error enums, and vehicle identity for Craton Shield",
       "scope": "required",
       "licenses": [
@@ -65,7 +65,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-types@0.6.0?download_url=file:///workspace/craton-shield-core/crates/types",
+      "purl": "pkg:cargo/vs-types@0.7.0?download_url=file:///workspace/craton-shield/core/types",
       "externalReferences": [
         {
           "type": "vcs",
@@ -111,15 +111,16 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+      "ref": "path+file:///workspace/craton-shield/core/types#vs-types@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0",
+      "ref": "path+file:///workspace/craton-shield/embedded/types-embedded#vs-types-embedded@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield/core/types#vs-types@0.7.0",
+        "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1"
       ]
     },
     {
