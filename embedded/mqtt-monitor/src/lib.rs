@@ -51,6 +51,13 @@ use vs_types_embedded::{
 // Configuration constants
 // ---------------------------------------------------------------------------
 
+/// Compile-time guard: the rule count is stored in a `u16`, so the maximum rule
+/// capacity (which the `capacity-large` / `capacity-xl` feature flags raise to
+/// 64 / 128) must never exceed `u16::MAX`. If a future feature flag pushes
+/// `MAX_TOPIC_RULES` past 65 535, this assertion fails the build instead of
+/// silently wrapping the counter and corrupting the rule table.
+const RULE_COUNT_FITS: () = assert!(MAX_TOPIC_RULES <= u16::MAX as usize);
+
 /// Maximum topic pattern length in bytes.
 const MAX_PATTERN_LEN: usize = 64;
 
@@ -636,7 +643,11 @@ pub struct MqttMonitor {
     /// Topic filtering rules.
     rules: [TopicRule; MAX_TOPIC_RULES],
     /// Number of active rules.
-    rule_count: u8,
+    ///
+    /// Widened to `u16` so the count can never wrap even if `MAX_TOPIC_RULES`
+    /// grows past 255 in a future feature flag. The `const` assertion in
+    /// [`RULE_COUNT_FITS`] guards the type bound at compile time.
+    rule_count: u16,
     /// Per-topic rate-limit buckets.
     rate_buckets: [RateBucket; MAX_RATE_BUCKETS_MQTT],
     /// Per-client CONNECT-storm tracking table.
@@ -668,6 +679,8 @@ impl MqttMonitor {
     ///
     /// By default, all topics are allowed. Add rules to restrict.
     pub fn new() -> Self {
+        // Force evaluation of the compile-time capacity guard.
+        let () = RULE_COUNT_FITS;
         Self {
             rules: [TopicRule::empty(); MAX_TOPIC_RULES],
             rule_count: 0,
