@@ -14,7 +14,7 @@ All state is stack-allocated with fixed-size arrays. No heap required.
 | **Topic allowlist/blocklist** | MQTT wildcard pattern matching (`+`, `#`). **First-match-wins** — rule ordering matters. | Allow all |
 | **Connect storm** | Sliding window detection of excessive CONNECT packets. | 5 per 60s |
 | **QoS enforcement** | Per-topic minimum or exact QoS policy. | Any QoS |
-| **Rate limiting** | Per-topic token bucket with automatic refill. 32 buckets max. | Unlimited |
+| **Rate limiting** | Per-topic token bucket with automatic refill. 32 buckets max (64 / 128 with `capacity-large` / `capacity-xl`). | Unlimited |
 
 ## Configuration
 
@@ -66,9 +66,9 @@ let result = monitor.inspect(&msg);
 
 ## Limits
 
-- 32 topic rules max
+- 32 topic rules max (64 with `capacity-large`, 128 with `capacity-xl`)
 - 64-byte topic patterns max
-- 32 rate-limit buckets
+- 32 rate-limit buckets (64 with `capacity-large`, 128 with `capacity-xl`)
 - 16 distinct clients tracked for CONNECT storm (LRU eviction when full)
 - 16 connect timestamps per client
 
