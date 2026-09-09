@@ -40,33 +40,8 @@
 use vs_types::{AlertSeverity, SecurityAlert, VsError};
 use vs_types_embedded::{
     fnv1a_hash, CoapMessage, CoapMessageType, CoapMethod, MonitorReset, TimestampValidator,
-    MAX_RATE_BUCKETS_COAP, MAX_URI_RULES, SOURCE_COAP,
+    MAX_COAP_URI_LEN, MAX_RATE_BUCKETS_COAP, MAX_URI_RULES, SOURCE_COAP,
 };
-
-// ---------------------------------------------------------------------------
-// Secondary hash for collision resistance (djb2)
-// ---------------------------------------------------------------------------
-
-/// Compute a djb2 hash of the given bytes. Used as a second independent hash
-/// alongside FNV-1a to strengthen collision resistance in bucket matching.
-#[inline]
-fn djb2_hash(data: &[u8]) -> u32 {
-    let mut hash: u32 = 5381;
-    for &b in data {
-        hash = hash.wrapping_mul(33).wrapping_add(b as u32);
-    }
-    hash
-}
-
-/// Compute a hash of the suffix portion of the URI (bytes after `BUCKET_PREFIX_LEN`).
-/// Returns 0 for short URIs, providing a third independent verification for long URIs.
-#[inline]
-fn suffix_hash(uri: &[u8]) -> u32 {
-    if uri.len() <= BUCKET_PREFIX_LEN {
-        return 0;
-    }
-    djb2_hash(&uri[BUCKET_PREFIX_LEN..])
-}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -74,11 +49,6 @@ fn suffix_hash(uri: &[u8]) -> u32 {
 
 /// Maximum URI pattern length.
 const MAX_PATTERN_LEN: usize = 64;
-
-/// Bucket collision-resistance prefix length. Increased from 8 to 32 bytes
-/// to strengthen collision resistance against crafted URI names that share
-/// a hash and short prefix.
-const BUCKET_PREFIX_LEN: usize = 32;
 
 /// Maximum rate-limit buckets (from feature-flag-driven constant).
 const MAX_RATE_BUCKETS: usize = MAX_RATE_BUCKETS_COAP;
@@ -436,17 +406,18 @@ impl UriRule {
 
 #[derive(Debug, Clone, Copy)]
 struct RateBucket {
+    /// FNV-1a hash of the full URI. Used only as a fast O(1) pre-filter before
+    /// the authoritative full-URI comparison; it is NOT relied upon for
+    /// identity, so its lack of keying cannot be exploited to alias buckets.
     uri_hash: u32,
-    /// Secondary URI hash (djb2) for collision resistance.
-    uri_hash2: u32,
-    /// First N bytes of the URI for collision resistance.
-    uri_prefix: [u8; BUCKET_PREFIX_LEN],
-    /// Length of valid bytes in `uri_prefix`.
-    uri_prefix_len: u8,
-    /// Full length of the URI that created this bucket.
+    /// The complete URI that created this bucket, stored verbatim. Bucket
+    /// identity is established by an exact byte comparison of this buffer, so
+    /// two distinct URIs can never share a bucket regardless of any hash
+    /// collision. `MAX_COAP_URI_LEN` (128) bounds the URI length, so the full
+    /// path always fits.
+    uri: [u8; MAX_COAP_URI_LEN],
+    /// Length of valid bytes in `uri`.
     uri_len: u16,
-    /// Suffix hash (djb2 of bytes after `BUCKET_PREFIX_LEN`) for collision resistance.
-    uri_suffix_hash: u32,
     tokens: u16,
     capacity: u16,
     last_refill_us: u64,
@@ -457,11 +428,8 @@ impl RateBucket {
     const fn empty() -> Self {
         Self {
             uri_hash: 0,
-            uri_hash2: 0,
-            uri_prefix: [0u8; BUCKET_PREFIX_LEN],
-            uri_prefix_len: 0,
+            uri: [0u8; MAX_COAP_URI_LEN],
             uri_len: 0,
-            uri_suffix_hash: 0,
             tokens: 0,
             capacity: 0,
             last_refill_us: 0,
@@ -469,21 +437,23 @@ impl RateBucket {
         }
     }
 
-    /// Check if this bucket matches the given URI (dual hash + suffix hash + length + prefix).
+    /// Check if this bucket matches the given URI.
+    ///
+    /// The `uri_hash` argument is a fast pre-filter only; the authoritative
+    /// test is the exact byte comparison of the full stored URI against the
+    /// candidate. Because the comparison is exact and complete, an attacker
+    /// cannot grind any (unkeyed) hash to alias two distinct paths into one
+    /// bucket and steal or share rate tokens.
     #[inline]
-    fn matches_uri(&self, uri_hash: u32, uri_hash2: u32, uri: &[u8], uri_suffix_hash: u32) -> bool {
-        if self.uri_hash != uri_hash || self.uri_hash2 != uri_hash2 {
+    fn matches_uri(&self, uri_hash: u32, uri: &[u8]) -> bool {
+        if self.uri_hash != uri_hash {
             return false;
         }
-        if uri.len() != self.uri_len as usize {
+        let len = self.uri_len as usize;
+        if uri.len() != len {
             return false;
         }
-        if self.uri_suffix_hash != uri_suffix_hash {
-            return false;
-        }
-        let prefix_len = self.uri_prefix_len as usize;
-        let cmp_len = uri.len().min(prefix_len);
-        self.uri_prefix[..cmp_len] == uri[..cmp_len]
+        self.uri[..len] == *uri
     }
 
     #[inline]
@@ -998,8 +968,7 @@ impl CoapMonitor {
             let max_rate = self.rules[idx].max_rate_per_sec;
             if max_rate > 0 {
                 let uri_hash = fnv1a_hash(uri);
-                let uri_hash2 = djb2_hash(uri);
-                match self.rate_limit_check(uri_hash, uri_hash2, uri, max_rate, msg.timestamp_us) {
+                match self.rate_limit_check(uri_hash, uri, max_rate, msg.timestamp_us) {
                     RateCheckResult::Allowed => {}
                     RateCheckResult::Limited => {
                         result.allowed = false;
@@ -1221,16 +1190,14 @@ impl CoapMonitor {
     /// the hot path's dominant cost.
     ///
     /// TODO(perf): on `capacity-xl`, switch to an open-addressed hash table
-    /// keyed by `(uri_hash, uri_hash2)` so the common-case match is O(1).
+    /// keyed by `uri_hash` so the common-case match is O(1).
     fn rate_limit_check(
         &mut self,
         uri_hash: u32,
-        uri_hash2: u32,
         uri: &[u8],
         max_rate: u16,
         now_us: u64,
     ) -> RateCheckResult {
-        let sfx_hash = suffix_hash(uri);
         // Single pass: find matching bucket, free slot, expired slot, and
         // LRU candidate all at once to avoid a second scan on eviction.
         let mut match_idx: Option<usize> = None;
@@ -1256,7 +1223,7 @@ impl CoapMonitor {
                 }
                 continue;
             }
-            if bucket.matches_uri(uri_hash, uri_hash2, uri, sfx_hash) {
+            if bucket.matches_uri(uri_hash, uri) {
                 match_idx = Some(i);
             }
             if bucket.last_refill_us < lru_ts {
@@ -1277,16 +1244,16 @@ impl CoapMonitor {
         // 2. Allocate in a free or expired slot.
         let alloc_slot = free_idx.or(expired_idx);
         if let Some(idx) = alloc_slot {
-            let prefix_len = uri.len().min(BUCKET_PREFIX_LEN);
-            let mut prefix = [0u8; BUCKET_PREFIX_LEN];
-            prefix[..prefix_len].copy_from_slice(&uri[..prefix_len]);
+            // Store the full URI verbatim. `uri_bytes()` clamps length to
+            // `MAX_COAP_URI_LEN`, so the slice always fits the buffer; clamp
+            // again defensively so an over-long slice cannot panic.
+            let copy_len = uri.len().min(MAX_COAP_URI_LEN);
+            let mut uri_buf = [0u8; MAX_COAP_URI_LEN];
+            uri_buf[..copy_len].copy_from_slice(&uri[..copy_len]);
             self.rate_buckets[idx] = RateBucket {
                 uri_hash,
-                uri_hash2,
-                uri_prefix: prefix,
-                uri_prefix_len: prefix_len as u8,
-                uri_len: uri.len() as u16,
-                uri_suffix_hash: sfx_hash,
+                uri: uri_buf,
+                uri_len: copy_len as u16,
                 tokens: max_rate.saturating_sub(1),
                 capacity: max_rate,
                 last_refill_us: now_us,
@@ -2066,6 +2033,48 @@ mod tests {
         msg2.timestamp_us = 2_000_000;
         let _ = monitor.inspect(&msg2);
         // Should not panic or cause bucket mismatch
+    }
+
+    #[test]
+    fn rate_bucket_distinguishes_uris_sharing_long_prefix() {
+        // Regression test for the High finding: two distinct URIs that share a
+        // long common prefix (>32 bytes) and have identical length must NOT
+        // alias to the same rate bucket. Bucket identity is now an exact
+        // full-URI comparison, so this holds regardless of any hash collision.
+        let mut monitor = CoapMonitor::new();
+        // Rate limit of 1/sec: the bucket is created with capacity-1 tokens,
+        // so the FIRST request to a given URI is allowed and the SECOND
+        // (same timestamp) is rate-limited.
+        monitor
+            .add_rule(b"/api", UriAction::Allow, AllowedMethods::ALL, 1)
+            .unwrap();
+
+        // 40-byte URIs sharing the first 39 bytes, differing only in the last.
+        let uri_a = b"/api/devices/00000000000000000000000000a";
+        let uri_b = b"/api/devices/00000000000000000000000000b";
+        assert_eq!(uri_a.len(), uri_b.len());
+        assert_eq!(uri_a[..39], uri_b[..39]);
+
+        let mut msg_a = CoapMessage::default();
+        msg_a.uri[..uri_a.len()].copy_from_slice(uri_a);
+        msg_a.uri_len = uri_a.len() as u8;
+        msg_a.timestamp_us = 1_000_000;
+
+        let mut msg_b = CoapMessage::default();
+        msg_b.uri[..uri_b.len()].copy_from_slice(uri_b);
+        msg_b.uri_len = uri_b.len() as u8;
+        msg_b.timestamp_us = 1_000_000;
+
+        // First request to A: allowed, creates A's bucket.
+        assert!(monitor.inspect(&msg_a).allowed);
+        // First request to B: must get its OWN bucket and be allowed. If B
+        // aliased into A's bucket it would be rate-limited here.
+        assert!(
+            monitor.inspect(&msg_b).allowed,
+            "distinct URI sharing a 39-byte prefix must not share a rate bucket"
+        );
+        // Second request to A at the same timestamp: A's bucket is now empty.
+        assert!(!monitor.inspect(&msg_a).allowed);
     }
 
     #[test]
