@@ -14,7 +14,7 @@ All state is stack-allocated with fixed-size arrays.
 |:---|:---|:---|
 | **URI allowlist/blocklist** | **Longest-prefix-match** on URI paths — more specific rules override general ones. | Allow all |
 | **Method enforcement** | Per-URI bitmask of allowed methods (GET/POST/PUT/DELETE). | All methods |
-| **Rate limiting** | Per-URI token bucket with automatic refill (16 / 64 / 128 buckets per capacity tier — see Limits). | Unlimited |
+| **Rate limiting** | Per-URI token bucket with automatic refill (16 / 32 / 64 buckets per capacity tier — see Limits). | Unlimited |
 | **Amplification detection** | Tracks request sizes; alerts if response exceeds threshold ratio. | 10x ratio |
 
 ## Configuration
@@ -78,7 +78,7 @@ features on `vs-types-embedded`. The URI pattern length is fixed.
 | Capacity                           | default | `capacity-large` | `capacity-xl` |
 |:-----------------------------------|--------:|-----------------:|--------------:|
 | URI rules                          |      24 |               48 |            96 |
-| Rate-limit buckets                 |      16 |               64 |           128 |
+| Rate-limit buckets                 |      16 |               32 |            64 |
 | Recent requests (amplification)    |      32 |               64 |           128 |
 | URI pattern length (bytes)         |      64 |               64 |            64 |
 
