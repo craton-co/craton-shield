@@ -46,9 +46,9 @@
 
 use vs_types::{AlertSeverity, SecurityAlert, VsError};
 use vs_types_embedded::{
-    ct_mac_eq, BleAddressType, BleEvent, BleEventType, MonitorReset, PairingMethod,
-    TimestampValidator, GATT_PERM_AUTHENTICATED, GATT_PERM_AUTHORIZED, MAX_MAC_FILTERS,
-    MAX_TRACKED_PEERS, SOURCE_BLE,
+    ct_is_broadcast_mac, ct_is_zero_mac, ct_mac_eq, BleAddressType, BleEvent, BleEventType,
+    MonitorReset, PairingMethod, TimestampValidator, GATT_PERM_AUTHENTICATED,
+    GATT_PERM_AUTHORIZED, MAX_MAC_FILTERS, MAX_TRACKED_PEERS, SOURCE_BLE,
 };
 
 // ---------------------------------------------------------------------------
@@ -629,8 +629,10 @@ impl BleMonitor {
             self.total_alerts = self.total_alerts.saturating_add(1);
         }
 
-        // Zero/broadcast MAC validation.
-        if is_zero_mac(&event.peer_addr) || is_broadcast_mac(&event.peer_addr) {
+        // Zero/broadcast MAC validation (constant-time: `peer_addr` is
+        // adversary-controlled, so use the constant-time variants from
+        // `vs-types-embedded` to avoid leaking the matching byte position).
+        if ct_is_zero_mac(&event.peer_addr) || ct_is_broadcast_mac(&event.peer_addr) {
             result.allowed = false;
             let aid = self.next_alert_id();
             result.push_alert(
@@ -1419,23 +1421,6 @@ fn detect_pairing_downgrade(
         _ => false,
     };
     secure_downgrade || method_downgrade
-}
-
-/// Check if a MAC address is all zeros (invalid).
-#[inline]
-fn is_zero_mac(mac: &[u8; 6]) -> bool {
-    mac[0] == 0 && mac[1] == 0 && mac[2] == 0 && mac[3] == 0 && mac[4] == 0 && mac[5] == 0
-}
-
-/// Check if a MAC address is the broadcast address (FF:FF:FF:FF:FF:FF).
-#[inline]
-fn is_broadcast_mac(mac: &[u8; 6]) -> bool {
-    mac[0] == 0xFF
-        && mac[1] == 0xFF
-        && mac[2] == 0xFF
-        && mac[3] == 0xFF
-        && mac[4] == 0xFF
-        && mac[5] == 0xFF
 }
 
 /// Compute a 32-bit FNV-1a digest of the advertisement-identifying fields
