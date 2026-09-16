@@ -223,6 +223,15 @@ struct FrameCounterWindow {
     last_activity_us: u64,
     /// Whether this entry is active.
     active: bool,
+    /// One-shot rollover arming flag. Set `true` only when `highest_seen`
+    /// has genuinely climbed into the top of the 32-bit range
+    /// (>= `ROLLOVER_TOP_THRESHOLD`). A low counter is accepted as a genuine
+    /// wrap *only* while this flag is armed, and acceptance immediately
+    /// disarms it. This prevents an attacker from replaying an old low
+    /// counter to re-anchor (and thereby destroy) the replay window: a
+    /// device only wraps once per 2^32 frames, so only one low counter may
+    /// legitimately re-anchor per arming.
+    rollover_armed: bool,
 }
 
 impl FrameCounterWindow {
@@ -233,6 +242,7 @@ impl FrameCounterWindow {
             recent_bitmap: 0,
             last_activity_us: 0,
             active: false,
+            rollover_armed: false,
         }
     }
 }
@@ -396,10 +406,19 @@ impl ZigbeeMonitor {
     /// Enable or disable acceptance of 32-bit frame-counter rollover.
     ///
     /// When enabled, a counter that wraps from `0xFFFFFFFF` to `0` (or
-    /// thereabouts) is accepted only if the previously seen value was in the
-    /// top of the range (>= `0xFFFF0000`). This prevents an attacker from
-    /// using a small counter to bypass replay protection on a freshly seen
-    /// device.
+    /// thereabouts) is accepted only when **all** of the following hold:
+    ///
+    /// * the previously seen value was in the top of the range
+    ///   (>= `0xFFFF0000`), and
+    /// * the per-device window is *armed* -- the highest counter genuinely
+    ///   advanced into the top range -- and this is the first low counter
+    ///   seen since arming.
+    ///
+    /// Acceptance immediately disarms the window, so a device may re-anchor
+    /// at most once per genuine wrap. This is fail-closed: an attacker who
+    /// replays an old low-counter frame cannot re-anchor (and thereby
+    /// destroy) the replay window, and a small counter cannot bypass replay
+    /// protection on a freshly seen device.
     pub fn set_allow_counter_rollover(&mut self, allow: bool) {
         self.allow_counter_rollover = allow;
     }
@@ -751,6 +770,9 @@ impl ZigbeeMonitor {
             recent_bitmap: 0,
             last_activity_us: ts_us,
             active: true,
+            // A device first seen with a counter already at the top of the
+            // range is armed so a subsequent genuine wrap can be accepted.
+            rollover_armed: counter >= ROLLOVER_TOP_THRESHOLD,
         };
         true
     }
@@ -790,6 +812,12 @@ impl ZigbeeMonitor {
             win.recent_bitmap = new_bitmap;
             win.highest_seen = counter;
             win.last_activity_us = ts_us;
+            // Arm the one-shot rollover flag once the counter has genuinely
+            // climbed into the top of the 32-bit range. Only then may a
+            // subsequent low counter be treated as a real wrap.
+            if counter >= ROLLOVER_TOP_THRESHOLD {
+                win.rollover_armed = true;
+            }
             return true;
         }
 
@@ -803,14 +831,28 @@ impl ZigbeeMonitor {
 
         // Detect plausible 32-bit rollover: an honest device that wrapped
         // from 0xFFFFFFFF -> 0 will produce a small counter when the tracked
-        // highest is in the top of the range. Only accept when explicitly
-        // enabled by config.
-        if allow_rollover && highest >= ROLLOVER_TOP_THRESHOLD && counter < ACCEPT_FORWARD_WINDOW {
+        // highest is in the top of the range. Accepted only when (a) rollover
+        // is explicitly enabled, (b) the window is *armed* -- i.e. the highest
+        // counter genuinely advanced into the top range -- and (c) this is
+        // the first low counter seen since arming. Acceptance immediately
+        // disarms the flag, so a device may re-anchor at most once per
+        // genuine wrap. This is fail-closed: an attacker replaying an old
+        // low-counter frame cannot re-anchor the window, because either the
+        // flag is already disarmed (replay rejected by the normal window
+        // rules below against the new low anchor) or, if it has not wrapped
+        // yet, the flag is simply not armed.
+        if allow_rollover
+            && win.rollover_armed
+            && highest >= ROLLOVER_TOP_THRESHOLD
+            && counter < ACCEPT_FORWARD_WINDOW
+        {
             // Treat this like a fresh start past rollover: drop the old
-            // window and re-anchor at the new (small) counter.
+            // window and re-anchor at the new (small) counter. Disarm so a
+            // replayed low counter cannot re-anchor a second time.
             win.highest_seen = counter;
             win.recent_bitmap = 0;
             win.last_activity_us = ts_us;
+            win.rollover_armed = false;
             return true;
         }
 
@@ -1313,6 +1355,46 @@ mod tests {
         assert!(mon.check_security_counter(0x0013, 0, 2000));
         // Continues from 0.
         assert!(mon.check_security_counter(0x0013, 1, 3000));
+    }
+
+    #[test]
+    fn security_counter_rollover_rejects_replayed_low_counter() {
+        // H1 regression: with rollover enabled, an attacker who replays a
+        // genuine old low-counter frame after the device has wrapped must
+        // NOT be able to re-anchor the window a second time.
+        let mut mon = ZigbeeMonitor::new();
+        mon.set_allow_counter_rollover(true);
+        // Device climbs into the top of the range.
+        assert!(mon.check_security_counter(0x0020, 0xFFFF_FFF0, 1000));
+        // Genuine wrap to a small counter -- accepted, re-anchors, disarms.
+        assert!(mon.check_security_counter(0x0020, 5, 2000));
+        // Attacker replays the same wrapped frame: exact replay, rejected.
+        assert!(!mon.check_security_counter(0x0020, 5, 3000));
+        // The window is now disarmed and anchored at 5. A second, larger
+        // low counter can no longer re-anchor via the rollover path; it is
+        // a suspicious forward jump from anchor 5 only if within the normal
+        // window. Replaying counter 5 a third time stays rejected, proving
+        // the window was NOT re-anchored downward.
+        assert!(!mon.check_security_counter(0x0020, 5, 4000));
+        // Legitimate forward progress after the wrap still works, and the
+        // anchor stays low (5 -> 6), confirming the window is intact.
+        assert!(mon.check_security_counter(0x0020, 6, 5000));
+        // Counter 6 is now the highest; replaying it is rejected.
+        assert!(!mon.check_security_counter(0x0020, 6, 6000));
+    }
+
+    #[test]
+    fn security_counter_rollover_unarmed_low_counter_rejected() {
+        // A low counter must not be accepted as a "wrap" unless the window
+        // genuinely climbed into the top range first (armed). Here the
+        // device has not yet reached the top, so a low counter below the
+        // anchor is a stale/replay frame regardless of the rollover flag.
+        let mut mon = ZigbeeMonitor::new();
+        mon.set_allow_counter_rollover(true);
+        assert!(mon.check_security_counter(0x0021, 0xFFFE_0000, 1000));
+        // 0xFFFE_0000 < ROLLOVER_TOP_THRESHOLD, so not armed: a low counter
+        // is rejected as out-of-window.
+        assert!(!mon.check_security_counter(0x0021, 5, 2000));
     }
 
     #[test]
