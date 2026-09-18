@@ -37,11 +37,71 @@ monitor.set_allowed_frame_types(0x0F); // all types
 
 ## Inspection
 
+`inspect` runs address, PAN, frame-type, rate-limit and timestamp checks.
+It does **not** run replay (security frame counter) detection — use
+`inspect_with_counter` for that.
+
 ```rust
+use vs_zigbee_monitor::ZigbeeMonitor;
+use vs_types_embedded::{ZigbeeFrame, ZigbeeFrameType};
+
+let mut monitor = ZigbeeMonitor::new();
+let frame = ZigbeeFrame {
+    src_pan_id: 0x1234,
+    src_addr: 0x0001,
+    dst_addr: 0x0000,
+    cluster_id: 0,
+    frame_type: ZigbeeFrameType::Data,
+    payload_len: 20,
+    timestamp_us: 1_000_000,
+};
+
 let result = monitor.inspect(&frame);
-// result.allowed     — whether the frame should be forwarded
-// result.alert_count — number of alerts (0-4)
-// result.alerts      — array of SecurityAlert structs
+// result.allowed        — whether the frame should be forwarded
+// result.alert_count    — number of alerts (0-4)
+// result.alerts         — array of SecurityAlert structs
+// result.alerts_dropped — alerts that overflowed the 4-slot array
+```
+
+### Replay protection — `inspect_with_counter`
+
+Replay detection (alert ID 5) requires the per-frame security counter, so it
+is only performed by `inspect_with_counter`. It runs every `inspect` check
+plus a per-source sliding-window counter check.
+
+```rust
+# use vs_zigbee_monitor::ZigbeeMonitor;
+# use vs_types_embedded::{ZigbeeFrame, ZigbeeFrameType};
+# let mut monitor = ZigbeeMonitor::new();
+# let frame = ZigbeeFrame {
+#     src_pan_id: 0x1234, src_addr: 0x0001, dst_addr: 0x0000, cluster_id: 0,
+#     frame_type: ZigbeeFrameType::Data, payload_len: 20, timestamp_us: 1_000_000,
+# };
+// `frame_counter` is the APS/NWK security frame counter for this frame.
+let result = monitor.inspect_with_counter(&frame, /* frame_counter = */ 42);
+```
+
+By default a counter that appears to wrap from `0xFFFFFFFF` to `0` is rejected
+as a stale frame. Call `set_allow_counter_rollover(true)` to accept a genuine
+32-bit rollover; rollover acceptance is fail-closed and requires the device's
+counter to have genuinely climbed into the top of the range first, so a
+replayed low-counter frame cannot re-anchor the replay window.
+
+### Trust Center monitoring — `record_trust_center_event`
+
+Trust Center key-rotation detection (alert ID 6) is driven separately by
+feeding Trust Center events as they occur:
+
+```rust
+# use vs_zigbee_monitor::ZigbeeMonitor;
+use vs_types_embedded::TrustCenterEvent;
+
+# let mut monitor = ZigbeeMonitor::new();
+let result = monitor.record_trust_center_event(
+    TrustCenterEvent::NetworkKeyUpdate,
+    /* ts_us = */ 5_000_000,
+);
+// More than 3 NetworkKeyUpdate events within 60s raises a rapid-rotation alert.
 ```
 
 ## Alert Source IDs
@@ -60,7 +120,7 @@ let result = monitor.inspect(&frame);
 
 ## Limits
 
-Default capacities (see [Feature Flags](#feature-flags) below):
+Default-tier capacities (no capacity feature enabled):
 
 - 32 address rules max
 - 16 rate-limit buckets (5-minute expiry)
@@ -68,11 +128,11 @@ Default capacities (see [Feature Flags](#feature-flags) below):
 - 16 Trust Center events in sliding window
 
 Address-rule, rate-bucket, and security-counter capacities come from
-`vs-types-embedded` constants and scale with the `capacity-large` /
+`vs-types-embedded` constants and scale up with the `capacity-large` /
 `capacity-xl` feature flags on this crate (which forward to the corresponding
-features on `vs-types-embedded`). The Trust Center event window is fixed at
-16 internally. See [`core/docs/feature-flags.md`](../../core/docs/feature-flags.md)
-for the exact sizes at each capacity tier.
+features on `vs-types-embedded`). For the exact sizes at each capacity tier,
+see the `MAX_ZIGBEE_*` constants in `vs-types-embedded`. The Trust Center
+event window is fixed at 16 internally.
 
 ## Errors
 
