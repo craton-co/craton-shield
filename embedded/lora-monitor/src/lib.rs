@@ -48,9 +48,9 @@ use vs_types_embedded::{
 
 pub mod join;
 pub use join::{
-    FrameDir, JoinGuard, JoinVerdict, LoraWanVersion, MalformedReason, ReplayKind,
-    DEV_NONCE_RING_DEPTH, JOIN_NONCE_RING_DEPTH, KEY_LEN, MAX_DEV_NONCE_DEVICES,
-    MAX_JOIN_NONCE_SERVERS,
+    FrameDir, JoinAcceptV1_1Context, JoinGuard, JoinReqType, JoinVerdict, LoraWanVersion,
+    MalformedReason, ReplayKind, DEV_NONCE_RING_DEPTH, JOIN_NONCE_RING_DEPTH, KEY_LEN,
+    MAX_DEV_NONCE_DEVICES, MAX_JOIN_NONCE_SERVERS,
 };
 
 // ---------------------------------------------------------------------------

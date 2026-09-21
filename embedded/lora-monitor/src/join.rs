@@ -165,6 +165,62 @@ impl FrameDir {
 }
 
 // ---------------------------------------------------------------------------
+// JoinAccept MIC context
+// ---------------------------------------------------------------------------
+
+/// The `JoinReqType` (a.k.a. `RejoinType`) byte that prefixes a `LoRaWAN`
+/// 1.1 JoinAccept MIC computation.
+///
+/// Per `LoRaWAN` 1.1 §6.2.5 the JoinAccept MIC is keyed with `JSIntKey` and
+/// computed over `JoinReqType | JoinEUI | DevNonce | MHDR | JoinNonce |
+/// NetID | DevAddr | DLSettings | RxDelay | CFList`. The first byte selects
+/// which join/rejoin request this JoinAccept answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinReqType {
+    /// Answers an OTAA `JoinRequest` (`JoinReqType` = 0xFF).
+    Join,
+    /// Answers a `RejoinRequest` type 0 (`JoinReqType` = 0x00).
+    Rejoin0,
+    /// Answers a `RejoinRequest` type 1 (`JoinReqType` = 0x01).
+    Rejoin1,
+    /// Answers a `RejoinRequest` type 2 (`JoinReqType` = 0x02).
+    Rejoin2,
+}
+
+impl JoinReqType {
+    #[inline]
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Join => 0xFF,
+            Self::Rejoin0 => 0x00,
+            Self::Rejoin1 => 0x01,
+            Self::Rejoin2 => 0x02,
+        }
+    }
+}
+
+/// Extra inputs required to verify a `LoRaWAN` 1.1 JoinAccept MIC.
+///
+/// In 1.0.x the JoinAccept MIC is a plain `aes128_cmac(AppKey, MHDR | ...)`.
+/// In 1.1 the MIC is `aes128_cmac(JSIntKey, JoinReqType | JoinEUI | DevNonce
+/// | MHDR | JoinNonce | NetID | DevAddr | DLSettings | RxDelay | CFList)` —
+/// a prefixed construction keyed with a *different* key. These three values
+/// (`JSIntKey`, the prefix `JoinEUI`, and the echoed `DevNonce`) are not
+/// carried in the JoinAccept frame itself, so the caller must supply them
+/// from the join session it is tracking.
+#[derive(Debug, Clone, Copy)]
+pub struct JoinAcceptV1_1Context<'a> {
+    /// The `JSIntKey` derived for this device (keys the 1.1 MIC).
+    pub js_int_key: &'a [u8; KEY_LEN],
+    /// The `JoinEUI` of the join server, prepended to the MIC input.
+    pub join_eui: &'a [u8; 8],
+    /// The `DevNonce` from the `JoinRequest` this JoinAccept answers.
+    pub dev_nonce: u16,
+    /// Which join/rejoin request this JoinAccept answers.
+    pub req_type: JoinReqType,
+}
+
+// ---------------------------------------------------------------------------
 // AES-CMAC helpers
 // ---------------------------------------------------------------------------
 
@@ -429,12 +485,29 @@ impl JoinGuard {
     /// before invoking this method -- the MIC is computed over the
     /// **plaintext** per the spec. `join_eui` identifies the join server
     /// for JoinNonce tracking.
+    ///
+    /// The MIC construction is **version-dependent** (`LoRaWAN` §6.2.5):
+    ///
+    /// * **1.0.x** -- `aes128_cmac(AppKey, MHDR | JoinNonce | NetID |
+    ///   DevAddr | DLSettings | RxDelay | CFList)`. `v1_1` must be `None`;
+    ///   if a context is supplied for a 1.0.x guard it is rejected
+    ///   fail-closed as [`JoinVerdict::MicMismatch`].
+    /// * **1.1** -- `aes128_cmac(JSIntKey, JoinReqType | JoinEUI |
+    ///   DevNonce | MHDR | JoinNonce | NetID | DevAddr | DLSettings |
+    ///   RxDelay | CFList)`. `v1_1` **must** carry a
+    ///   [`JoinAcceptV1_1Context`]; if it is `None` the frame is rejected
+    ///   fail-closed as [`JoinVerdict::MicMismatch`] (the genuine MIC
+    ///   cannot be reconstructed without `JSIntKey`).
+    ///
+    /// For a 1.1 guard, `app_key` is ignored — the 1.1 MIC is keyed with
+    /// the `JSIntKey` carried in `v1_1`.
     pub fn inspect_join_accept(
         &mut self,
         phy: &[u8],
         app_key: &[u8; KEY_LEN],
         join_eui: &[u8; 8],
         timestamp_us: u64,
+        v1_1: Option<JoinAcceptV1_1Context<'_>>,
     ) -> JoinVerdict {
         if phy.len() < MIN_JOIN_ACCEPT_LEN {
             return JoinVerdict::Malformed {
@@ -459,8 +532,34 @@ impl JoinGuard {
         let mut frame_mic = [0u8; MIC_LEN];
         frame_mic.copy_from_slice(&phy[mic_offset..]);
 
-        let computed = cmac4(app_key, mac_input);
-        if !ct_mic_eq(&computed, &frame_mic) {
+        // MIC construction differs between 1.0.x and 1.1. Fail closed if the
+        // caller's context does not match the guard's configured version:
+        // the MIC simply cannot be reconstructed in a mismatched mode.
+        let mic_ok = match (self.version, v1_1) {
+            // 1.0.x: plain AES-CMAC over the JoinAccept body under AppKey.
+            (LoraWanVersion::V1_0, None) => {
+                let computed = cmac4(app_key, mac_input);
+                ct_mic_eq(&computed, &frame_mic)
+            }
+            // 1.1: prefixed AES-CMAC keyed with JSIntKey.
+            (LoraWanVersion::V1_1, Some(ctx)) => {
+                // cmac( JoinReqType | JoinEUI | DevNonce | mac_input )
+                // where mac_input already begins with the MHDR.
+                let mut mac = <Cmac<Aes128> as KeyInit>::new_from_slice(ctx.js_int_key)
+                    .expect("AES-128 CMAC key length is fixed at 16 bytes");
+                mac.update(&[ctx.req_type.byte()]);
+                mac.update(ctx.join_eui);
+                mac.update(&ctx.dev_nonce.to_le_bytes());
+                mac.update(mac_input);
+                let tag = mac.finalize().into_bytes();
+                let mut computed = [0u8; MIC_LEN];
+                computed.copy_from_slice(&tag[..MIC_LEN]);
+                ct_mic_eq(&computed, &frame_mic)
+            }
+            // Version/context mismatch -> cannot verify -> reject.
+            (LoraWanVersion::V1_0, Some(_)) | (LoraWanVersion::V1_1, None) => false,
+        };
+        if !mic_ok {
             return JoinVerdict::MicMismatch;
         }
 
@@ -693,7 +792,7 @@ mod tests {
         buf
     }
 
-    /// Build a well-formed JoinAccept (plaintext) with a valid MIC.
+    /// Build a well-formed 1.0.x JoinAccept (plaintext) with a valid MIC.
     fn make_join_accept(join_nonce: u32, key: &[u8; KEY_LEN]) -> [u8; MIN_JOIN_ACCEPT_LEN] {
         let mut buf = [0u8; MIN_JOIN_ACCEPT_LEN];
         buf[0] = 0b001 << 5; // MType = 001 (JoinAccept), Major = 00
@@ -703,6 +802,33 @@ mod tests {
         // bytes 4..13 left zero (NetID, DevAddr, DLSettings, RxDelay)
         let mic = cmac4(key, &buf[..13]);
         buf[13..17].copy_from_slice(&mic);
+        buf
+    }
+
+    /// Build a well-formed 1.1 JoinAccept (plaintext) with a valid MIC.
+    ///
+    /// The 1.1 MIC keys with `JSIntKey` and prepends `JoinReqType |
+    /// JoinEUI | DevNonce` to the MAC input.
+    fn make_join_accept_v1_1(
+        join_nonce: u32,
+        js_int_key: &[u8; KEY_LEN],
+        join_eui: &[u8; 8],
+        dev_nonce: u16,
+        req_type: JoinReqType,
+    ) -> [u8; MIN_JOIN_ACCEPT_LEN] {
+        let mut buf = [0u8; MIN_JOIN_ACCEPT_LEN];
+        buf[0] = 0b001 << 5; // MType = 001 (JoinAccept), Major = 00
+        buf[1] = (join_nonce & 0xFF) as u8;
+        buf[2] = ((join_nonce >> 8) & 0xFF) as u8;
+        buf[3] = ((join_nonce >> 16) & 0xFF) as u8;
+        // bytes 4..13 left zero (NetID, DevAddr, DLSettings, RxDelay)
+        let mut mac = <Cmac<Aes128> as KeyInit>::new_from_slice(js_int_key).unwrap();
+        mac.update(&[req_type.byte()]);
+        mac.update(join_eui);
+        mac.update(&dev_nonce.to_le_bytes());
+        mac.update(&buf[..13]);
+        let tag = mac.finalize().into_bytes();
+        buf[13..17].copy_from_slice(&tag[..MIC_LEN]);
         buf
     }
 
@@ -895,34 +1021,85 @@ mod tests {
     // JoinAccept / JoinNonce
     // -----------------------------------------------------------------------
 
+    /// Build the 1.1 verification context matching `make_join_accept_v1_1`.
+    fn v1_1_ctx(dev_nonce: u16) -> JoinAcceptV1_1Context<'static> {
+        JoinAcceptV1_1Context {
+            js_int_key: &KEY,
+            join_eui: &JOIN_EUI,
+            dev_nonce,
+            req_type: JoinReqType::Join,
+        }
+    }
+
     #[test]
     fn join_accept_v1_1_monotonic_violation_rejected() {
         let mut g = JoinGuard::new(LoraWanVersion::V1_1);
-        let f1 = make_join_accept(10, &KEY);
-        let f2 = make_join_accept(11, &KEY);
-        let f3 = make_join_accept(11, &KEY); // not strictly increasing
-        let f4 = make_join_accept(5, &KEY); // decreasing
+        let f1 = make_join_accept_v1_1(10, &KEY, &JOIN_EUI, 1, JoinReqType::Join);
+        let f2 = make_join_accept_v1_1(11, &KEY, &JOIN_EUI, 2, JoinReqType::Join);
+        let f3 = make_join_accept_v1_1(11, &KEY, &JOIN_EUI, 3, JoinReqType::Join); // not increasing
+        let f4 = make_join_accept_v1_1(5, &KEY, &JOIN_EUI, 4, JoinReqType::Join); // decreasing
         assert_eq!(
-            g.inspect_join_accept(&f1, &KEY, &JOIN_EUI, 1),
+            g.inspect_join_accept(&f1, &KEY, &JOIN_EUI, 1, Some(v1_1_ctx(1))),
             JoinVerdict::Allow
         );
         assert_eq!(
-            g.inspect_join_accept(&f2, &KEY, &JOIN_EUI, 2),
+            g.inspect_join_accept(&f2, &KEY, &JOIN_EUI, 2, Some(v1_1_ctx(2))),
             JoinVerdict::Allow
         );
         assert_eq!(
-            g.inspect_join_accept(&f3, &KEY, &JOIN_EUI, 3),
+            g.inspect_join_accept(&f3, &KEY, &JOIN_EUI, 3, Some(v1_1_ctx(3))),
             JoinVerdict::Replay {
                 kind: ReplayKind::JoinNonce,
                 value: 11
             }
         );
         assert_eq!(
-            g.inspect_join_accept(&f4, &KEY, &JOIN_EUI, 4),
+            g.inspect_join_accept(&f4, &KEY, &JOIN_EUI, 4, Some(v1_1_ctx(4))),
             JoinVerdict::Replay {
                 kind: ReplayKind::JoinNonce,
                 value: 5
             }
+        );
+    }
+
+    #[test]
+    fn join_accept_v1_1_plain_cmac_mic_rejected() {
+        // A 1.0.x-style plain-CMAC JoinAccept must NOT verify under a 1.1
+        // guard: the 1.1 MIC is a prefixed construction keyed with JSIntKey.
+        // This is the regression that H1 documents.
+        let mut g = JoinGuard::new(LoraWanVersion::V1_1);
+        let f_v1_0 = make_join_accept(42, &KEY);
+        assert_eq!(
+            g.inspect_join_accept(&f_v1_0, &KEY, &JOIN_EUI, 1, Some(v1_1_ctx(1))),
+            JoinVerdict::MicMismatch
+        );
+        // And a genuine 1.1 JoinAccept with the same nonce verifies.
+        let f_v1_1 = make_join_accept_v1_1(42, &KEY, &JOIN_EUI, 1, JoinReqType::Join);
+        assert_eq!(
+            g.inspect_join_accept(&f_v1_1, &KEY, &JOIN_EUI, 2, Some(v1_1_ctx(1))),
+            JoinVerdict::Allow
+        );
+    }
+
+    #[test]
+    fn join_accept_v1_1_missing_context_fails_closed() {
+        // A 1.1 guard with no context cannot reconstruct the MIC -> reject.
+        let mut g = JoinGuard::new(LoraWanVersion::V1_1);
+        let f = make_join_accept_v1_1(7, &KEY, &JOIN_EUI, 1, JoinReqType::Join);
+        assert_eq!(
+            g.inspect_join_accept(&f, &KEY, &JOIN_EUI, 1, None),
+            JoinVerdict::MicMismatch
+        );
+    }
+
+    #[test]
+    fn join_accept_v1_0_with_context_fails_closed() {
+        // A 1.0.x guard handed a 1.1 context is a misconfiguration -> reject.
+        let mut g = JoinGuard::new(LoraWanVersion::V1_0);
+        let f = make_join_accept(7, &KEY);
+        assert_eq!(
+            g.inspect_join_accept(&f, &KEY, &JOIN_EUI, 1, Some(v1_1_ctx(1))),
+            JoinVerdict::MicMismatch
         );
     }
 
@@ -933,15 +1110,15 @@ mod tests {
         let f_b = make_join_accept(0x0011_1111, &KEY); // smaller is fine in 1.0.x
         let f_a2 = make_join_accept(0x00AA_AAAA, &KEY);
         assert_eq!(
-            g.inspect_join_accept(&f_a, &KEY, &JOIN_EUI, 1),
+            g.inspect_join_accept(&f_a, &KEY, &JOIN_EUI, 1, None),
             JoinVerdict::Allow
         );
         assert_eq!(
-            g.inspect_join_accept(&f_b, &KEY, &JOIN_EUI, 2),
+            g.inspect_join_accept(&f_b, &KEY, &JOIN_EUI, 2, None),
             JoinVerdict::Allow
         );
         assert_eq!(
-            g.inspect_join_accept(&f_a2, &KEY, &JOIN_EUI, 3),
+            g.inspect_join_accept(&f_a2, &KEY, &JOIN_EUI, 3, None),
             JoinVerdict::Replay {
                 kind: ReplayKind::JoinNonce,
                 value: 0x00AA_AAAA
@@ -952,10 +1129,10 @@ mod tests {
     #[test]
     fn join_accept_mic_mismatch_rejected() {
         let mut g = JoinGuard::new(LoraWanVersion::V1_1);
-        let mut f = make_join_accept(7, &KEY);
+        let mut f = make_join_accept_v1_1(7, &KEY, &JOIN_EUI, 1, JoinReqType::Join);
         f[14] ^= 0x80; // flip a bit in MIC
         assert_eq!(
-            g.inspect_join_accept(&f, &KEY, &JOIN_EUI, 1),
+            g.inspect_join_accept(&f, &KEY, &JOIN_EUI, 1, Some(v1_1_ctx(1))),
             JoinVerdict::MicMismatch
         );
     }
@@ -964,7 +1141,7 @@ mod tests {
     fn join_accept_too_short_rejected() {
         let mut g = JoinGuard::new(LoraWanVersion::V1_1);
         assert_eq!(
-            g.inspect_join_accept(&[0u8; 5], &KEY, &JOIN_EUI, 0),
+            g.inspect_join_accept(&[0u8; 5], &KEY, &JOIN_EUI, 0, None),
             JoinVerdict::Malformed {
                 reason: MalformedReason::TooShort
             }
