@@ -103,6 +103,12 @@ pub enum MalformedReason {
     /// MHDR message type byte did not match the frame kind the caller
     /// asserted (e.g. caller said `JoinRequest` but MHDR said `Data`).
     MTypeMismatch,
+    /// The low 16 bits of the caller-supplied 32-bit frame counter did not
+    /// match the 16-bit FCnt carried on air in the data frame. The MIC is
+    /// keyed on the full 32-bit counter, so a mismatch here would otherwise
+    /// surface as a misleading [`JoinVerdict::MicMismatch`]; this reason
+    /// tells the caller its frame-counter reconstruction is wrong.
+    FCntMismatch,
 }
 
 /// Outcome of inspecting a single LoRaWAN frame.
@@ -605,6 +611,18 @@ impl JoinGuard {
     /// lives in [`super::LoraMonitor`].
     ///
     /// `nwk_skey` is the NwkSKey (1.0.x) or FNwkSIntKey (1.1).
+    ///
+    /// # Frame-counter reconstruction
+    ///
+    /// A `LoRaWAN` data frame carries only the **low 16 bits** of the frame
+    /// counter on air, but the B0 MIC block is keyed on the **full 32-bit**
+    /// counter. The caller must therefore supply a `full_fcnt` reconstructed
+    /// from session state whose low 16 bits equal the on-air FCnt. This
+    /// method extracts the on-air 16-bit FCnt from `phy[6..8]` and rejects
+    /// the frame with [`MalformedReason::FCntMismatch`] when the caller's
+    /// `full_fcnt & 0xFFFF` disagrees — so a stale reconstruction surfaces
+    /// as a clear diagnostic rather than a misleading
+    /// [`JoinVerdict::MicMismatch`].
     pub fn verify_data_frame(
         &self,
         phy: &[u8],
@@ -636,6 +654,19 @@ impl JoinGuard {
                     reason: MalformedReason::MTypeMismatch,
                 };
             }
+        }
+
+        // Reconcile the caller's 32-bit FCnt with the 16-bit FCnt on air.
+        // FCnt sits at phy[6..8] (LE): MHDR[1] | DevAddr[4] | FCtrl[1].
+        // MIN_DATA_FRAME_LEN (12) guarantees these bytes exist. The B0
+        // block is keyed on the full 32-bit counter, so a low-16-bit
+        // disagreement means the caller's reconstruction is wrong and the
+        // MIC would fail for a misleading reason. Reject explicitly.
+        let on_air_fcnt = u16::from_le_bytes([phy[6], phy[7]]);
+        if (full_fcnt & 0xFFFF) as u16 != on_air_fcnt {
+            return JoinVerdict::Malformed {
+                reason: MalformedReason::FCntMismatch,
+            };
         }
 
         let mic_offset = phy.len() - MIC_LEN;
@@ -1198,12 +1229,37 @@ mod tests {
     }
 
     #[test]
-    fn data_frame_wrong_fcnt_breaks_mic() {
-        // Caller's full_fcnt feeds the B0 block. If wrong, MIC differs.
+    fn data_frame_wrong_low16_fcnt_reported_as_fcnt_mismatch() {
+        // Caller's full_fcnt whose low 16 bits disagree with the on-air FCnt
+        // is reported explicitly as FCntMismatch, not a misleading
+        // MicMismatch.
         let g = JoinGuard::new(LoraWanVersion::V1_1);
         let frame = make_uplink(&KEY, [1, 2, 3, 4], 7);
         assert_eq!(
             g.verify_data_frame(&frame, &KEY, FrameDir::Up, [1, 2, 3, 4], 8),
+            JoinVerdict::Malformed {
+                reason: MalformedReason::FCntMismatch
+            }
+        );
+    }
+
+    #[test]
+    fn data_frame_32bit_fcnt_with_matching_low16_verifies() {
+        // A device that has rolled the 16-bit counter over: full_fcnt is
+        // 0x0001_0007 (low 16 bits = 7, matching the on-air value). The MIC
+        // is keyed on the full 32-bit counter, so the caller's high bits
+        // must be correct for the frame to verify.
+        let g = JoinGuard::new(LoraWanVersion::V1_1);
+        let full: u32 = 0x0001_0007;
+        let frame = make_uplink(&KEY, [9, 9, 9, 9], full);
+        assert_eq!(
+            g.verify_data_frame(&frame, &KEY, FrameDir::Up, [9, 9, 9, 9], full),
+            JoinVerdict::Allow
+        );
+        // Same on-air frame but wrong high bits -> low 16 still match, so
+        // the FCnt reconciliation passes, but the B0 MIC fails.
+        assert_eq!(
+            g.verify_data_frame(&frame, &KEY, FrameDir::Up, [9, 9, 9, 9], 0x0002_0007),
             JoinVerdict::MicMismatch
         );
     }
