@@ -2,62 +2,62 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.3",
   "version": 1,
-  "serialNumber": "urn:uuid:704f97fb-54e3-46ac-ba33-8eb6218ed228",
+  "serialNumber": "urn:uuid:f39d9cdd-aa0c-453f-b8f1-87a453eb02ee",
   "metadata": {
-    "timestamp": "2026-04-01T01:04:29.131689050Z",
+    "timestamp": "2026-05-21T13:07:40.602624600Z",
     "tools": [
       {
         "vendor": "CycloneDX",
         "name": "cargo-cyclonedx",
-        "version": "0.5.8"
+        "version": "0.5.9"
       }
     ],
     "component": {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-embedded/crates/modbus-monitor#vs-modbus-monitor@0.7.0",
-      "name": "vs-modbus-monitor",
+      "bom-ref": "path+file:///workspace/craton-shield/embedded/modbus-monitor-emb#vs-modbus-monitor-emb@0.7.0",
+      "name": "vs-modbus-monitor-emb",
       "version": "0.7.0",
-      "description": "Modbus RTU/TCP intrusion detection for Craton Shield",
+      "description": "Modbus RTU/TCP intrusion detection for Craton Shield Embedded",
       "scope": "required",
       "licenses": [
         {
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-modbus-monitor@0.7.0?download_url=file://.",
+      "purl": "pkg:cargo/vs-modbus-monitor-emb@0.7.0?download_url=file://.",
       "externalReferences": [
         {
           "type": "website",
-          "url": "https://github.com/craton-co/craton-shield-embedded"
+          "url": "https://github.com/craton-co/craton-shield"
         },
         {
           "type": "vcs",
-          "url": "https://github.com/craton-co/craton-shield-embedded"
+          "url": "https://github.com/craton-co/craton-shield"
         }
       ],
       "components": [
         {
           "type": "library",
-          "bom-ref": "path+file:///workspace/craton-shield-embedded/crates/modbus-monitor#vs-modbus-monitor@0.7.0 bin-target-0",
-          "name": "vs_modbus_monitor",
+          "bom-ref": "path+file:///workspace/craton-shield/embedded/modbus-monitor-emb#vs-modbus-monitor-emb@0.7.0 lib-target-0",
+          "name": "vs_modbus_monitor_emb",
           "version": "0.7.0",
-          "purl": "pkg:cargo/vs-modbus-monitor@0.7.0?download_url=file://.#src/lib.rs"
+          "purl": "pkg:cargo/vs-modbus-monitor-emb@0.7.0?download_url=file://.#src/lib.rs"
         }
       ]
     },
     "properties": [
       {
         "name": "cdx:rustc:sbom:target:triple",
-        "value": "x86_64-unknown-linux-gnu"
+        "value": "x86_64-pc-windows-msvc"
       }
     ]
   },
   "components": [
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield/core/types#vs-types@0.7.0",
       "name": "vs-types",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Core types, error enums, and vehicle identity for Craton Shield",
       "scope": "required",
       "licenses": [
@@ -65,8 +65,12 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-types@0.6.0?download_url=file:///workspace/craton-shield-core/crates/types",
+      "purl": "pkg:cargo/vs-types@0.7.0?download_url=file:///workspace/craton-shield/core/types",
       "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/craton-co/craton-shield"
+        },
         {
           "type": "vcs",
           "url": "https://github.com/craton-co/craton-shield"
@@ -75,7 +79,7 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0",
+      "bom-ref": "path+file:///workspace/craton-shield/embedded/types-embedded#vs-types-embedded@0.7.0",
       "name": "vs-types-embedded",
       "version": "0.7.0",
       "description": "IoT/embedded type extensions for Craton Shield",
@@ -85,15 +89,15 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-types-embedded@0.7.0?download_url=file://../types-embedded",
+      "purl": "pkg:cargo/vs-types-embedded@0.7.0?download_url=file:///workspace/craton-shield/embedded/types-embedded",
       "externalReferences": [
         {
           "type": "website",
-          "url": "https://github.com/craton-co/craton-shield-embedded"
+          "url": "https://github.com/craton-co/craton-shield"
         },
         {
           "type": "vcs",
-          "url": "https://github.com/craton-co/craton-shield-embedded"
+          "url": "https://github.com/craton-co/craton-shield"
         }
       ]
     },
@@ -135,22 +139,22 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+      "ref": "path+file:///workspace/craton-shield/core/types#vs-types@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-embedded/crates/modbus-monitor#vs-modbus-monitor@0.7.0",
+      "ref": "path+file:///workspace/craton-shield/embedded/modbus-monitor-emb#vs-modbus-monitor-emb@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
-        "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0"
+        "path+file:///workspace/craton-shield/core/types#vs-types@0.7.0",
+        "path+file:///workspace/craton-shield/embedded/types-embedded#vs-types-embedded@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0",
+      "ref": "path+file:///workspace/craton-shield/embedded/types-embedded#vs-types-embedded@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield/core/types#vs-types@0.7.0"
       ]
     },
     {
