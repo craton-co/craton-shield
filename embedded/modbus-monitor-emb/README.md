@@ -24,7 +24,7 @@ All state is stack-allocated with fixed-size arrays. No heap required.
 | **Rate limiting** | Per-unit token bucket with automatic refill. Buckets expire after 5 minutes of inactivity. | Unlimited |
 | **Invalid unit ID detection** | Flags reserved Modbus unit IDs (248-255). | Enabled |
 | **TCP source IP filtering** | Allow/block by source IP prefix (CIDR-style). TCP transport only. | Allow all |
-| **Exception response tracking** | Per-unit exception count in a 60-second window. Alerts when threshold exceeded. | 10 per 60s |
+| **Exception response tracking** | Per-unit exception count in a 60-second window. Alerts on the 11th exception (more than 10) within the window. | >10 per 60s |
 | **Timestamp validation** | Detects clock manipulation via monotonicity and gap checks. | Enabled |
 
 ## Configuration
