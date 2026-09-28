@@ -24,7 +24,7 @@ vs-coap-monitor.workspace = true
 vs-ble-monitor.workspace = true
 vs-zigbee-monitor.workspace = true
 vs-lora-monitor.workspace = true
-vs-modbus-monitor = { path = "../modbus-monitor-emb", version = "0.7.0", package = "vs-modbus-monitor-emb" }
+vs-modbus-monitor-emb = { workspace = true }
 
 [dev-dependencies]
 vs-crypto = { workspace = true, features = ["mock-hsm"] }
@@ -42,7 +42,7 @@ capacity-large = [
     "vs-ble-monitor/capacity-large",
     "vs-zigbee-monitor/capacity-large",
     "vs-lora-monitor/capacity-large",
-    "vs-modbus-monitor/capacity-large",
+    "vs-modbus-monitor-emb/capacity-large",
 ]
 capacity-xl = [
     "vs-runtime/capacity-xl",
@@ -51,7 +51,7 @@ capacity-xl = [
     "vs-ble-monitor/capacity-xl",
     "vs-zigbee-monitor/capacity-xl",
     "vs-lora-monitor/capacity-xl",
-    "vs-modbus-monitor/capacity-xl",
+    "vs-modbus-monitor-emb/capacity-xl",
 ]
 
 [lints]

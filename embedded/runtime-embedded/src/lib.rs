@@ -60,7 +60,7 @@ use vs_ble_monitor::{BleInspectResult, BleMonitor};
 use vs_coap_monitor::{CoapInspectResult, CoapMonitor, CoapPeer};
 use vs_crypto::CryptoProvider;
 use vs_lora_monitor::{LoraInspectResult, LoraMonitor};
-use vs_modbus_monitor::{ModbusInspectResult, ModbusMonitor};
+use vs_modbus_monitor_emb::{ModbusInspectResult, ModbusMonitor};
 use vs_mqtt_monitor::{MqttInspectResult, MqttMonitor};
 use vs_runtime::{
     CanFrame, CratonShield, EthPacket, PlatformConfig, PlatformHealth, SubsystemStatus,
@@ -84,7 +84,7 @@ pub use vs_coap_monitor;
 /// Re-export of the `LoRa` monitor crate.
 pub use vs_lora_monitor;
 /// Re-export of the Modbus monitor crate (embedded variant).
-pub use vs_modbus_monitor;
+pub use vs_modbus_monitor_emb;
 /// Re-export of the MQTT monitor crate.
 pub use vs_mqtt_monitor;
 /// Re-export of the core runtime crate. `CoreConfig` aliases
@@ -2226,8 +2226,8 @@ mod tests {
             .modbus_monitor_mut()
             .add_rule(
                 1,
-                vs_modbus_monitor::UnitAction::Block,
-                vs_modbus_monitor::FunctionPolicy::Any,
+                vs_modbus_monitor_emb::UnitAction::Block,
+                vs_modbus_monitor_emb::FunctionPolicy::Any,
                 0,
                 u16::MAX,
                 0,
@@ -2586,8 +2586,8 @@ mod tests {
             .modbus_monitor_mut()
             .add_rule(
                 2,
-                vs_modbus_monitor::UnitAction::Block,
-                vs_modbus_monitor::FunctionPolicy::Any,
+                vs_modbus_monitor_emb::UnitAction::Block,
+                vs_modbus_monitor_emb::FunctionPolicy::Any,
                 0,
                 u16::MAX,
                 0,
