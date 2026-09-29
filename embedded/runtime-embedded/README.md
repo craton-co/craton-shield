@@ -116,4 +116,4 @@ See the [workspace CHANGELOG](../../CHANGELOG.md) for version history.
 
 ## License
 
-Apache-2.0. See [LICENSE](../../LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
