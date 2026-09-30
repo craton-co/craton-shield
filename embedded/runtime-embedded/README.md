@@ -84,7 +84,7 @@ let health = shield.health_status();
 | `submit_eth_packet(pkt, ts)` | Pass-through to core Ethernet IDS |
 | `tick(ts)` | Periodic tick delegation |
 | `health_status()` | Snapshot of core + IoT subsystem health |
-| `drain_recent_alerts()` | Drain and clear the recent alerts buffer |
+| `drain_recent_alerts_into(buf)` | Drain recent alerts into a caller-provided buffer and clear the ring buffer |
 | `record_config_change(src, change, ts)` | Record a configuration change in audit log |
 | `alert_callback()` | Access the installed alert callback |
 | `shutdown()` | Graceful shutdown |
