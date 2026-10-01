@@ -4,7 +4,7 @@
   "version": 1,
   "serialNumber": "urn:uuid:92a96ff3-2acb-4e57-a8ab-5dafc8d6b403",
   "metadata": {
-    "timestamp": "2026-04-01T01:04:29.020272362Z",
+    "timestamp": "2026-05-21T00:00:00.000000000Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -55,9 +55,9 @@
   "components": [
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/anomaly#vs-anomaly@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/anomaly#vs-anomaly@0.7.0",
       "name": "vs-anomaly",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "EWMA-based statistical anomaly detection for automotive signal monitoring",
       "scope": "required",
       "licenses": [
@@ -65,7 +65,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-anomaly@0.6.0?download_url=file:///workspace/craton-shield-core/crates/anomaly",
+      "purl": "pkg:cargo/vs-anomaly@0.7.0?download_url=file:///workspace/craton-shield-core/crates/anomaly",
       "externalReferences": [
         {
           "type": "vcs",
@@ -75,9 +75,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/can-monitor#vs-can-monitor@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/can-monitor#vs-can-monitor@0.7.0",
       "name": "vs-can-monitor",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "CAN/CAN-FD intrusion detection with flood, DLC, allowlist, and entropy analysis",
       "scope": "required",
       "licenses": [
@@ -85,7 +85,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-can-monitor@0.6.0?download_url=file:///workspace/craton-shield-core/crates/can-monitor",
+      "purl": "pkg:cargo/vs-can-monitor@0.7.0?download_url=file:///workspace/craton-shield-core/crates/can-monitor",
       "externalReferences": [
         {
           "type": "vcs",
@@ -95,9 +95,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
       "name": "vs-crypto",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Cryptographic provider traits and post-quantum abstractions for Craton Shield",
       "scope": "required",
       "licenses": [
@@ -105,7 +105,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-crypto@0.6.0?download_url=file:///workspace/craton-shield-core/crates/crypto",
+      "purl": "pkg:cargo/vs-crypto@0.7.0?download_url=file:///workspace/craton-shield-core/crates/crypto",
       "externalReferences": [
         {
           "type": "vcs",
@@ -115,9 +115,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.7.0",
       "name": "vs-eth-monitor",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Automotive Ethernet intrusion detection with SOME/IP, DoIP, and ARP monitoring",
       "scope": "required",
       "licenses": [
@@ -125,7 +125,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-eth-monitor@0.6.0?download_url=file:///workspace/craton-shield-core/crates/eth-monitor",
+      "purl": "pkg:cargo/vs-eth-monitor@0.7.0?download_url=file:///workspace/craton-shield-core/crates/eth-monitor",
       "externalReferences": [
         {
           "type": "vcs",
@@ -135,9 +135,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/event-logger#vs-event-logger@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/event-logger#vs-event-logger@0.7.0",
       "name": "vs-event-logger",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Tamper-evident HMAC-chained event logging ring buffer",
       "scope": "required",
       "licenses": [
@@ -145,7 +145,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-event-logger@0.6.0?download_url=file:///workspace/craton-shield-core/crates/event-logger",
+      "purl": "pkg:cargo/vs-event-logger@0.7.0?download_url=file:///workspace/craton-shield-core/crates/event-logger",
       "externalReferences": [
         {
           "type": "vcs",
@@ -155,9 +155,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/hal#vs-hal@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/hal#vs-hal@0.7.0",
       "name": "vs-hal",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Hardware abstraction layer traits for CAN, Ethernet, Timer, and HSM",
       "scope": "required",
       "licenses": [
@@ -165,7 +165,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-hal@0.6.0?download_url=file:///workspace/craton-shield-core/crates/hal",
+      "purl": "pkg:cargo/vs-hal@0.7.0?download_url=file:///workspace/craton-shield-core/crates/hal",
       "externalReferences": [
         {
           "type": "vcs",
@@ -175,9 +175,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/ids-engine#vs-ids-engine@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/ids-engine#vs-ids-engine@0.7.0",
       "name": "vs-ids-engine",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Alert correlation engine combining CAN and Ethernet IDS subsystems",
       "scope": "required",
       "licenses": [
@@ -185,7 +185,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-ids-engine@0.6.0?download_url=file:///workspace/craton-shield-core/crates/ids-engine",
+      "purl": "pkg:cargo/vs-ids-engine@0.7.0?download_url=file:///workspace/craton-shield-core/crates/ids-engine",
       "externalReferences": [
         {
           "type": "vcs",
@@ -195,9 +195,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/integrity#vs-integrity@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/integrity#vs-integrity@0.7.0",
       "name": "vs-integrity",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Memory region integrity monitoring with constant-time SHA-256 verification",
       "scope": "required",
       "licenses": [
@@ -205,7 +205,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-integrity@0.6.0?download_url=file:///workspace/craton-shield-core/crates/integrity",
+      "purl": "pkg:cargo/vs-integrity@0.7.0?download_url=file:///workspace/craton-shield-core/crates/integrity",
       "externalReferences": [
         {
           "type": "vcs",
@@ -215,9 +215,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/key-manager#vs-key-manager@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/key-manager#vs-key-manager@0.7.0",
       "name": "vs-key-manager",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Key lifecycle management with zeroization and audit trails for Craton Shield",
       "scope": "required",
       "licenses": [
@@ -225,7 +225,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-key-manager@0.6.0?download_url=file:///workspace/craton-shield-core/crates/key-manager",
+      "purl": "pkg:cargo/vs-key-manager@0.7.0?download_url=file:///workspace/craton-shield-core/crates/key-manager",
       "externalReferences": [
         {
           "type": "vcs",
@@ -235,9 +235,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/netfw#vs-netfw@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/netfw#vs-netfw@0.7.0",
       "name": "vs-netfw",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Automotive Ethernet firewall with token-bucket rate limiting and dynamic rules",
       "scope": "required",
       "licenses": [
@@ -245,7 +245,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-netfw@0.6.0?download_url=file:///workspace/craton-shield-core/crates/netfw",
+      "purl": "pkg:cargo/vs-netfw@0.7.0?download_url=file:///workspace/craton-shield-core/crates/netfw",
       "externalReferences": [
         {
           "type": "vcs",
@@ -255,9 +255,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/ota-validator#vs-ota-validator@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/ota-validator#vs-ota-validator@0.7.0",
       "name": "vs-ota-validator",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "TUF/Uptane OTA update validation with rollback protection",
       "scope": "required",
       "licenses": [
@@ -265,7 +265,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-ota-validator@0.6.0?download_url=file:///workspace/craton-shield-core/crates/ota-validator",
+      "purl": "pkg:cargo/vs-ota-validator@0.7.0?download_url=file:///workspace/craton-shield-core/crates/ota-validator",
       "externalReferences": [
         {
           "type": "vcs",
@@ -275,9 +275,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/policy-engine#vs-policy-engine@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/policy-engine#vs-policy-engine@0.7.0",
       "name": "vs-policy-engine",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Security policy evaluation engine for alert routing and response",
       "scope": "required",
       "licenses": [
@@ -285,7 +285,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-policy-engine@0.6.0?download_url=file:///workspace/craton-shield-core/crates/policy-engine",
+      "purl": "pkg:cargo/vs-policy-engine@0.7.0?download_url=file:///workspace/craton-shield-core/crates/policy-engine",
       "externalReferences": [
         {
           "type": "vcs",
@@ -295,9 +295,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/runtime#vs-runtime@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/runtime#vs-runtime@0.7.0",
       "name": "vs-runtime",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Craton Shield platform orchestrator managing all security subsystems",
       "scope": "required",
       "licenses": [
@@ -305,7 +305,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-runtime@0.6.0?download_url=file:///workspace/craton-shield-core/crates/runtime",
+      "purl": "pkg:cargo/vs-runtime@0.7.0?download_url=file:///workspace/craton-shield-core/crates/runtime",
       "externalReferences": [
         {
           "type": "vcs",
@@ -315,9 +315,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/secure-boot#vs-secure-boot@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/secure-boot#vs-secure-boot@0.7.0",
       "name": "vs-secure-boot",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Secure boot chain verification with PCR measurement for Craton Shield",
       "scope": "required",
       "licenses": [
@@ -325,7 +325,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-secure-boot@0.6.0?download_url=file:///workspace/craton-shield-core/crates/secure-boot",
+      "purl": "pkg:cargo/vs-secure-boot@0.7.0?download_url=file:///workspace/craton-shield-core/crates/secure-boot",
       "externalReferences": [
         {
           "type": "vcs",
@@ -335,9 +335,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/storage#vs-storage@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/storage#vs-storage@0.7.0",
       "name": "vs-storage",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Persistent storage abstraction for configuration and key material",
       "scope": "required",
       "licenses": [
@@ -345,7 +345,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-storage@0.6.0?download_url=file:///workspace/craton-shield-core/crates/storage",
+      "purl": "pkg:cargo/vs-storage@0.7.0?download_url=file:///workspace/craton-shield-core/crates/storage",
       "externalReferences": [
         {
           "type": "vcs",
@@ -355,9 +355,9 @@
     },
     {
       "type": "library",
-      "bom-ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+      "bom-ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
       "name": "vs-types",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "description": "Core types, error enums, and vehicle identity for Craton Shield",
       "scope": "required",
       "licenses": [
@@ -365,7 +365,7 @@
           "expression": "Apache-2.0"
         }
       ],
-      "purl": "pkg:cargo/vs-types@0.6.0?download_url=file:///workspace/craton-shield-core/crates/types",
+      "purl": "pkg:cargo/vs-types@0.7.0?download_url=file:///workspace/craton-shield-core/crates/types",
       "externalReferences": [
         {
           "type": "vcs",
@@ -610,130 +610,130 @@
   ],
   "dependencies": [
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/anomaly#vs-anomaly@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/anomaly#vs-anomaly@0.7.0",
       "dependsOn": []
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/can-monitor#vs-can-monitor@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/can-monitor#vs-can-monitor@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.8.2"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/event-logger#vs-event-logger@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/event-logger#vs-event-logger@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1",
-        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/hal#vs-hal@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/hal#vs-hal@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/ids-engine#vs-ids-engine@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/ids-engine#vs-ids-engine@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/can-monitor#vs-can-monitor@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/can-monitor#vs-can-monitor@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/integrity#vs-integrity@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/integrity#vs-integrity@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1",
-        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/key-manager#vs-key-manager@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/key-manager#vs-key-manager@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.8.2"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/netfw#vs-netfw@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/netfw#vs-netfw@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/ota-validator#vs-ota-validator@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/ota-validator#vs-ota-validator@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1",
-        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/hal#vs-hal@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/key-manager#vs-key-manager@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/storage#vs-storage@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/hal#vs-hal@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/key-manager#vs-key-manager@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/storage#vs-storage@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/policy-engine#vs-policy-engine@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/policy-engine#vs-policy-engine@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/runtime#vs-runtime@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/runtime#vs-runtime@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/anomaly#vs-anomaly@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/can-monitor#vs-can-monitor@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/event-logger#vs-event-logger@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/hal#vs-hal@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/ids-engine#vs-ids-engine@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/integrity#vs-integrity@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/key-manager#vs-key-manager@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/netfw#vs-netfw@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/ota-validator#vs-ota-validator@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/policy-engine#vs-policy-engine@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/secure-boot#vs-secure-boot@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/storage#vs-storage@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/anomaly#vs-anomaly@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/can-monitor#vs-can-monitor@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/eth-monitor#vs-eth-monitor@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/event-logger#vs-event-logger@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/hal#vs-hal@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/ids-engine#vs-ids-engine@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/integrity#vs-integrity@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/key-manager#vs-key-manager@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/netfw#vs-netfw@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/ota-validator#vs-ota-validator@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/policy-engine#vs-policy-engine@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/secure-boot#vs-secure-boot@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/storage#vs-storage@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/secure-boot#vs-secure-boot@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/secure-boot#vs-secure-boot@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.8.2"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/storage#vs-storage@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/storage#vs-storage@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "registry+https://github.com/rust-lang/crates.io-index#zeroize@1.8.2"
       ]
     },
     {
-      "ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+      "ref": "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#subtle@2.6.1"
       ]
@@ -741,35 +741,35 @@
     {
       "ref": "path+file:///workspace/craton-shield-embedded/crates/ble-monitor#vs-ble-monitor@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0"
       ]
     },
     {
       "ref": "path+file:///workspace/craton-shield-embedded/crates/coap-monitor#vs-coap-monitor@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0"
       ]
     },
     {
       "ref": "path+file:///workspace/craton-shield-embedded/crates/lora-monitor#vs-lora-monitor@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0"
       ]
     },
     {
       "ref": "path+file:///workspace/craton-shield-embedded/crates/modbus-monitor#vs-modbus-monitor@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0"
       ]
     },
     {
       "ref": "path+file:///workspace/craton-shield-embedded/crates/mqtt-monitor#vs-mqtt-monitor@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0"
       ]
     },
@@ -778,12 +778,12 @@
       "dependsOn": [
         "path+file:///workspace/craton-shield-embedded/crates/ble-monitor#vs-ble-monitor@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/coap-monitor#vs-coap-monitor@0.7.0",
-        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/crypto#vs-crypto@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/lora-monitor#vs-lora-monitor@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/modbus-monitor#vs-modbus-monitor@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/mqtt-monitor#vs-mqtt-monitor@0.7.0",
-        "path+file:///workspace/craton-shield-core/crates/runtime#vs-runtime@0.6.0",
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/runtime#vs-runtime@0.7.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/zigbee-monitor#vs-zigbee-monitor@0.7.0"
       ]
@@ -791,13 +791,13 @@
     {
       "ref": "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0"
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0"
       ]
     },
     {
       "ref": "path+file:///workspace/craton-shield-embedded/crates/zigbee-monitor#vs-zigbee-monitor@0.7.0",
       "dependsOn": [
-        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.6.0",
+        "path+file:///workspace/craton-shield-core/crates/types#vs-types@0.7.0",
         "path+file:///workspace/craton-shield-embedded/crates/types-embedded#vs-types-embedded@0.7.0"
       ]
     },
