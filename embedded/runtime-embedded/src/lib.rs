@@ -821,6 +821,12 @@ impl<C: CryptoProvider + Clone, CB: AlertCallback> EmbeddedShield<C, CB> {
         msg: &mut ModbusTcpMessage,
         ts_us: u64,
     ) -> ModbusInspectResult {
+        // `ModbusTcpMessage` has no top-level timestamp field of its own; the
+        // monitor reads the validated timestamp from the embedded RTU frame.
+        // We therefore stamp `msg.rtu.timestamp_us` instead of a TCP-envelope
+        // field — an intentional asymmetry vs. the other `submit_*` methods.
+        // If `ModbusTcpMessage` ever gains its own timestamp field, this stamp
+        // must be updated to set it as well.
         submit_body!(
             self,
             modbus_monitor,
