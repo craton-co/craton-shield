@@ -1289,6 +1289,7 @@ dependencies = [
 name = "vs-types-embedded"
 version = "0.7.1"
 dependencies = [
+ "subtle",
  "vs-types",
 ]
 

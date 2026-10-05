@@ -1094,6 +1094,16 @@ impl<C: CryptoProvider + Clone, CB: AlertCallback> EmbeddedShield<C, CB> {
 
     /// Returns the total number of alerts that have been stored (may exceed
     /// `MAX_RECENT_ALERTS` if the buffer has wrapped).
+    ///
+    /// # Saturation
+    ///
+    /// This is an **approximate** lifetime counter. It is a `u32` updated with
+    /// `saturating_add`, so after `u32::MAX` (~4.29 billion) alerts it sticks
+    /// at `u32::MAX` and stops advancing. The recent-alert ring buffer and
+    /// [`Self::recent_alert_count_valid`] keep working correctly regardless —
+    /// only this raw total saturates. Do not rely on it as a strictly
+    /// monotonic event counter for telemetry, billing, or forensics on a
+    /// long-lived device; treat a value of `u32::MAX` as "at least that many".
     #[inline]
     pub fn recent_alert_total(&self) -> u32 {
         self.recent_alert_count

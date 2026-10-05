@@ -47,8 +47,8 @@
 use vs_types::{AlertSeverity, SecurityAlert, VsError};
 use vs_types_embedded::{
     ct_is_broadcast_mac, ct_is_zero_mac, ct_mac_eq, BleAddressType, BleEvent, BleEventType,
-    MonitorReset, PairingMethod, TimestampValidator, GATT_PERM_AUTHENTICATED,
-    GATT_PERM_AUTHORIZED, MAX_MAC_FILTERS, MAX_TRACKED_PEERS, SOURCE_BLE,
+    MonitorReset, PairingMethod, TimestampValidator, GATT_PERM_AUTHENTICATED, GATT_PERM_AUTHORIZED,
+    MAX_MAC_FILTERS, MAX_TRACKED_PEERS, SOURCE_BLE,
 };
 
 // ---------------------------------------------------------------------------
